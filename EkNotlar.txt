@@ -1,0 +1,3 @@
+Postman ile backend kontrolü
+
+Her bilgisayarda çalışabilmeli, nasıl çalıştığını açıklayan .md dosyası

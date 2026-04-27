@@ -1,0 +1,21 @@
+multimodal yapay zeka
+
+Token maliyetini düşük tutmk ne demek?
+
+Semantik değerlendirme ve punlama ne demek ? 
+
+Not ve aynı parametreleri önbellekte nasıl tutabilrim ve getirebilirim ? 
+
+OCR nedir ? 
+
+JSON formatında yapılandırma nedir ve bu proje için düşünürsek nasıl yapabilirim ?
+
+Asenkron üretim nedir ve bu proje için düşünürsek nasıl yapabilirim ?
+
+İP1 tablosundaki 1.1 ve 1.2 kısımlarını nasıl yapabilirim ?
+
+İP3 de 3.4ü açıkla ve nasıl yapabilirim ? 
+
+API endpoint ne demektir ?
+
+Zaman çizelgesini 4 hafta olacak şekilde düzenle.
