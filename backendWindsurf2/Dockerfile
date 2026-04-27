@@ -18,5 +18,5 @@ COPY . .
 # Portu aç
 EXPOSE 8000
 
-# Uygulamayı başlat
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Uygulamayı başlat (Shell form kullanarak $PORT değişkeninin çözümlenmesini sağlıyoruz)
+CMD uvicorn main:app --host 0.0.0.0 --port $PORT
