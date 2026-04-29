@@ -3,38 +3,49 @@ database.py – Async SQLAlchemy engine and session factory.
 """
 
 import re
+import logging
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from config import settings
 
+logger = logging.getLogger("main")
+
 def _get_engine_url():
     """
     Constructs the database URL safely. 
-    It bypasses the buggy URL parsing by using SQLAlchemy's URL.create
-    when DB_USER and DB_PASSWORD are provided.
+    Forces the use of explicit DB_USER and DB_PASSWORD to avoid parsing bugs.
     """
     original_url = settings.DATABASE_URL
+    user = settings.DB_USER
+    password = settings.DB_PASSWORD
     
-    if settings.DB_USER and settings.DB_PASSWORD:
-        # Regex to extract host, port, and database name from:
-        # postgresql+asyncpg://[ANY_STUFF]@host:port/dbname
-        # We look for the part after the last '@'
+    if user and password:
+        # Masked logging for debugging (only shows first 3 chars of user)
+        logger.info(f"Connecting to DB using explicit credentials. User starts with: {user[:3]}...")
+        
+        # Regex to extract host, port, and database name
         match = re.search(r"@?([^/:]+)(?::(\d+))?/([^?#]+)", original_url)
         if match:
             host = match.group(1)
             port = int(match.group(2)) if match.group(2) else 5432
             database = match.group(3)
             
+            # CRITICAL: Some Poolers need the dot to be URL encoded if passed in a string,
+            # but URL.create handles this. We use the raw values here.
             return URL.create(
                 drivername="postgresql+asyncpg",
-                username=settings.DB_USER,
-                password=settings.DB_PASSWORD,
+                username=user,
+                password=password,
                 host=host,
                 port=port,
                 database=database
             )
+        else:
+            logger.error("Could not parse HOST/PORT from DATABASE_URL. Check Render settings.")
+    else:
+        logger.warning("DB_USER or DB_PASSWORD is EMPTY. Falling back to DATABASE_URL (This might fail with user 'postgres' error).")
     
     return original_url
 
@@ -44,6 +55,7 @@ def _get_connect_args():
         "command_timeout": 60
     }
 
+# Create engine
 engine = create_async_engine(
     _get_engine_url(),
     echo=settings.DEBUG,
@@ -55,13 +67,7 @@ engine = create_async_engine(
     connect_args=_get_connect_args(),
 )
 
-async_session_factory = async_sessionmaker(
-    bind=engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-    autoflush=False,
-    autocommit=False,
-)
+async_session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
 def AsyncSessionLocal():
     return async_session_factory()
