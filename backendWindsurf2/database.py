@@ -15,6 +15,9 @@ engine = create_async_engine(
     max_overflow=settings.DB_MAX_OVERFLOW,
     pool_timeout=settings.DB_POOL_TIMEOUT,
     pool_recycle=settings.DB_POOL_RECYCLE,
+    # Required for Supabase Transaction Pooler (PgBouncer) compatibility.
+    # PgBouncer does not support prepared statements; setting cache size to 0 disables them.
+    connect_args={"statement_cache_size": 0},
 )
 
 async_session_factory = async_sessionmaker(
@@ -35,10 +38,12 @@ def get_task_engine():
         settings.DATABASE_URL,
         echo=settings.DEBUG,
         pool_pre_ping=True,
-        pool_size=5, # Smaller pool for tasks
+        pool_size=5,  # Smaller pool for tasks
         max_overflow=10,
         pool_timeout=settings.DB_POOL_TIMEOUT,
         pool_recycle=settings.DB_POOL_RECYCLE,
+        # Required for Supabase Transaction Pooler (PgBouncer) compatibility.
+        connect_args={"statement_cache_size": 0},
     )
 
 
