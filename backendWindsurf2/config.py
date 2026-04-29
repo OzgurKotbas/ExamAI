@@ -24,8 +24,8 @@ class Settings(BaseSettings):
     # ── Database ───────────────────────────────────────────────────────────────
     DATABASE_URL: str = "postgresql+asyncpg://examai_user:password@localhost:5432/examai_db"
     # Explicit credentials — used to bypass asyncpg URL parser stripping Supabase project ref
-    DB_USER: str = ""
-    DB_PASSWORD: str = ""
+    SUPABASE_AUTH_USER: str = ""
+    SUPABASE_AUTH_PASS: str = ""
     
     # ── Database Connection Pool ───────────────────────────────────────────────
     DB_POOL_SIZE: int = 10

@@ -3,37 +3,30 @@ database.py – Async SQLAlchemy engine and session factory.
 """
 
 import re
-import logging
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from config import settings
 
-logger = logging.getLogger("main")
-
 def _get_engine_url():
     """
-    Constructs the database URL safely. 
-    Forces the use of explicit DB_USER and DB_PASSWORD to avoid parsing bugs.
+    Constructs the database URL safely using SUPABASE_AUTH_USER and SUPABASE_AUTH_PASS.
     """
     original_url = settings.DATABASE_URL
-    user = settings.DB_USER
-    password = settings.DB_PASSWORD
+    user = settings.SUPABASE_AUTH_USER
+    password = settings.SUPABASE_AUTH_PASS
     
+    # Direct print to bypass any log filtering/delays
     if user and password:
-        # Masked logging for debugging (only shows first 3 chars of user)
-        logger.info(f"Connecting to DB using explicit credentials. User starts with: {user[:3]}...")
+        print(f"DEBUG: Found credentials for {user[:5]}... Reconstructing URL.")
         
-        # Regex to extract host, port, and database name
         match = re.search(r"@?([^/:]+)(?::(\d+))?/([^?#]+)", original_url)
         if match:
             host = match.group(1)
             port = int(match.group(2)) if match.group(2) else 5432
             database = match.group(3)
             
-            # CRITICAL: Some Poolers need the dot to be URL encoded if passed in a string,
-            # but URL.create handles this. We use the raw values here.
             return URL.create(
                 drivername="postgresql+asyncpg",
                 username=user,
@@ -42,10 +35,8 @@ def _get_engine_url():
                 port=port,
                 database=database
             )
-        else:
-            logger.error("Could not parse HOST/PORT from DATABASE_URL. Check Render settings.")
     else:
-        logger.warning("DB_USER or DB_PASSWORD is EMPTY. Falling back to DATABASE_URL (This might fail with user 'postgres' error).")
+        print("DEBUG: SUPABASE_AUTH_USER or PASS is missing! Check Render environment.")
     
     return original_url
 
@@ -55,7 +46,6 @@ def _get_connect_args():
         "command_timeout": 60
     }
 
-# Create engine
 engine = create_async_engine(
     _get_engine_url(),
     echo=settings.DEBUG,
