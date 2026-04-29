@@ -12,17 +12,16 @@ from config import settings
 def _get_engine_url():
     """
     Constructs the database URL safely. 
-    If DB_USER and DB_PASSWORD are provided, it uses them explicitly to avoid
-    URL parsing issues with dots in Supabase usernames.
+    It bypasses the buggy URL parsing by using SQLAlchemy's URL.create
+    when DB_USER and DB_PASSWORD are provided.
     """
-    # 1. Start with the base URL from settings
     original_url = settings.DATABASE_URL
     
-    # 2. If we have explicit credentials, we rebuild the URL to be safe
     if settings.DB_USER and settings.DB_PASSWORD:
-        # Regex to extract host, port, and database name from existing URL
-        # Format expected: postgresql+asyncpg://user:pass@host:port/dbname
-        match = re.search(r"@([^/:]+)(?::(\d+))?/([^?]+)", original_url)
+        # Regex to extract host, port, and database name from:
+        # postgresql+asyncpg://[ANY_STUFF]@host:port/dbname
+        # We look for the part after the last '@'
+        match = re.search(r"@?([^/:]+)(?::(\d+))?/([^?#]+)", original_url)
         if match:
             host = match.group(1)
             port = int(match.group(2)) if match.group(2) else 5432
@@ -37,17 +36,14 @@ def _get_engine_url():
                 database=database
             )
     
-    # 3. Fallback to original URL if regex fails or credentials not provided
     return original_url
 
 def _get_connect_args():
-    """Returns arguments required for Supabase/PgBouncer compatibility."""
     return {
         "statement_cache_size": 0,
         "command_timeout": 60
     }
 
-# Create global engine
 engine = create_async_engine(
     _get_engine_url(),
     echo=settings.DEBUG,
@@ -68,11 +64,9 @@ async_session_factory = async_sessionmaker(
 )
 
 def AsyncSessionLocal():
-    """Returns a session using the global engine."""
     return async_session_factory()
 
 def get_task_engine():
-    """Creates a fresh engine for background tasks."""
     return create_async_engine(
         _get_engine_url(),
         echo=settings.DEBUG,
