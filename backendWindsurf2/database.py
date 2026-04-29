@@ -7,6 +7,24 @@ from sqlalchemy.orm import DeclarativeBase
 
 from config import settings
 
+
+def _build_connect_args() -> dict:
+    """
+    Build asyncpg connect_args.
+
+    When DB_USER is set, asyncpg receives the full Supabase username
+    (e.g. 'postgres.PROJECT_REF') directly, bypassing SQLAlchemy's URL
+    parser which strips the project-ref suffix and causes a misleading
+    'password authentication failed for user postgres' error.
+    """
+    args: dict = {"statement_cache_size": 0}
+    if settings.DB_USER:
+        args["user"] = settings.DB_USER
+    if settings.DB_PASSWORD:
+        args["password"] = settings.DB_PASSWORD
+    return args
+
+
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.DEBUG,
@@ -15,9 +33,7 @@ engine = create_async_engine(
     max_overflow=settings.DB_MAX_OVERFLOW,
     pool_timeout=settings.DB_POOL_TIMEOUT,
     pool_recycle=settings.DB_POOL_RECYCLE,
-    # Required for Supabase Transaction Pooler (PgBouncer) compatibility.
-    # PgBouncer does not support prepared statements; setting cache size to 0 disables them.
-    connect_args={"statement_cache_size": 0},
+    connect_args=_build_connect_args(),
 )
 
 async_session_factory = async_sessionmaker(
@@ -28,9 +44,11 @@ async_session_factory = async_sessionmaker(
     autocommit=False,
 )
 
+
 def AsyncSessionLocal():
     """Returns a session using the global engine (suitable for FastAPI)."""
     return async_session_factory()
+
 
 def get_task_engine():
     """Creates a fresh engine for a single background task loop."""
@@ -42,8 +60,7 @@ def get_task_engine():
         max_overflow=10,
         pool_timeout=settings.DB_POOL_TIMEOUT,
         pool_recycle=settings.DB_POOL_RECYCLE,
-        # Required for Supabase Transaction Pooler (PgBouncer) compatibility.
-        connect_args={"statement_cache_size": 0},
+        connect_args=_build_connect_args(),
     )
 
 
