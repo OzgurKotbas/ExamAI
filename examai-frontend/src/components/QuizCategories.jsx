@@ -49,15 +49,15 @@ export default function QuizCategories({
   const [editingCategory, setEditingCategory] = useState(null);
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [openMenuId, setOpenMenuId] = useState(null);
-+
-+  // Update default categories when language changes
-+  useEffect(() => {
-+    setCategories(prev => prev.map(cat => {
-+      if (cat.id === 'all') return { ...cat, name: t('allQuizzes') };
-+      if (cat.id === 'uncategorized') return { ...cat, name: t('uncategorized') };
-+      return cat;
-+    }));
-+  }, [currentLanguage, t]);
+
+  // Update default categories when language changes
+  useEffect(() => {
+    setCategories(prev => prev.map(cat => {
+      if (cat.id === 'all') return { ...cat, name: t('allQuizzes') };
+      if (cat.id === 'uncategorized') return { ...cat, name: t('uncategorized') };
+      return cat;
+    }));
+  }, [currentLanguage, t]);
 
   // Save to localStorage whenever categories change
   useEffect(() => {

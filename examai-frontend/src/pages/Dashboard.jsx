@@ -178,8 +178,8 @@ export default function Dashboard() {
       toast.success(t('creating'), { icon: '⏳' });
       setShowQuizModal(false);
       await fetchData();
-+     // Polling'i hemen tetiklemek için ref üzerinden çağır
-+     checkGeneratingQuizzes();
+      // Polling'i hemen tetiklemek için ref üzerinden çağır
+      checkGeneratingQuizzes();
       
       // Don't navigate immediately - let user know it's being generated
       setActiveTab('categories');
