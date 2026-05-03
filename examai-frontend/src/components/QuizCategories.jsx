@@ -49,6 +49,15 @@ export default function QuizCategories({
   const [editingCategory, setEditingCategory] = useState(null);
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [openMenuId, setOpenMenuId] = useState(null);
++
++  // Update default categories when language changes
++  useEffect(() => {
++    setCategories(prev => prev.map(cat => {
++      if (cat.id === 'all') return { ...cat, name: t('allQuizzes') };
++      if (cat.id === 'uncategorized') return { ...cat, name: t('uncategorized') };
++      return cat;
++    }));
++  }, [currentLanguage, t]);
 
   // Save to localStorage whenever categories change
   useEffect(() => {
@@ -302,7 +311,7 @@ export default function QuizCategories({
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <h4 className="font-semibold text-gray-900">Sınav #{quiz.id?.slice(-6) || '...'}</h4>
+                          <h4 className="font-semibold text-gray-900">{t('quiz')} #{quiz.id?.slice(-6) || '...'}</h4>
                           {quiz.latest_grading_id ? (
                             <div className="flex flex-col items-end gap-1">
                               <div className="flex items-center gap-1.5 px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-[10px] font-bold">

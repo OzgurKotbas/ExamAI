@@ -188,8 +188,8 @@ const translations = {
     appName: 'ExamAI',
     appDescription: 'Yapay Zeka Destekli Sınav Platformu',
     loading: 'Yükleniyor...',
-    error: 'Bir hata oluştu',
     success: 'Başarılı!',
+    quiz: 'Sınav',
   },
   en: {
     // Login
@@ -377,8 +377,8 @@ const translations = {
     appName: 'ExamAI',
     appDescription: 'AI-Powered Exam Platform',
     loading: 'Loading...',
-    error: 'An error occurred',
     success: 'Success!',
+    quiz: 'Quiz',
   },
 };
 

@@ -453,7 +453,7 @@ export default function Quiz() {
           <div className="flex justify-end mt-8 mb-12">
             <button
               onClick={handleSubmit}
-              disabled={isSubmitting || Object.keys(answers).length < questions.length}
+              disabled={isSubmitting}
               className="flex items-center gap-2 px-8 py-4 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 disabled:opacity-50 transition-all shadow-md"
             >
               {isSubmitting ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />}

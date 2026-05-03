@@ -177,7 +177,9 @@ export default function Dashboard() {
       
       toast.success(t('creating'), { icon: '⏳' });
       setShowQuizModal(false);
-      fetchData();
+      await fetchData();
++     // Polling'i hemen tetiklemek için ref üzerinden çağır
++     checkGeneratingQuizzes();
       
       // Don't navigate immediately - let user know it's being generated
       setActiveTab('categories');
@@ -523,7 +525,7 @@ export default function Dashboard() {
                           <Brain className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
                         </div>
                         <div>
-                          <h3 className="font-semibold text-gray-900 dark:text-white">Sınav #{quiz.id?.slice(-6) || '...'}</h3>
+                          <h3 className="font-semibold text-gray-900 dark:text-white">{t('quiz')} #{quiz.id?.slice(-6) || '...'}</h3>
                           <p className="text-sm text-gray-500 dark:text-gray-400">
                             {quiz.total_questions} {currentLanguage === 'tr' ? 'soru' : 'questions'} • {quiz.mc_ratio === 1.0 ? (currentLanguage === 'tr' ? 'Test' : 'Test') : (quiz.mc_ratio === 0.0 ? (currentLanguage === 'tr' ? 'Klasik' : 'Classic') : (currentLanguage === 'tr' ? 'Karma' : 'Mixed'))} • {quiz.difficulty === 'easy' ? t('easy') : quiz.difficulty === 'hard' ? t('hard') : t('medium')}
                           </p>
