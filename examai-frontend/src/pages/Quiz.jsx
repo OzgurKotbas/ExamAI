@@ -100,16 +100,12 @@ export default function Quiz() {
   };
 
   const handleSubmit = async () => {
-    if (Object.keys(answers).length < questions.length) {
-      toast.error(t('answerAllQuestions'));
-      return;
-    }
-
     setIsSubmitting(true);
     try {
-      const formattedAnswers = Object.entries(answers).map(([qId, ans]) => ({
-        question_id: qId,
-        user_answer: ans
+      // Tüm soruları gönder; cevaplanmamış olanları boş string olarak dahil et
+      const formattedAnswers = questions.map((q) => ({
+        question_id: q.id,
+        user_answer: answers[q.id] || ''
       }));
 
       const res = await quizzesApi.submit(quizId, formattedAnswers);
