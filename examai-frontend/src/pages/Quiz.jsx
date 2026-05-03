@@ -22,6 +22,9 @@ export default function Quiz() {
   const [isExporting, setIsExporting] = useState(false);
   const resultsRef = useRef(null);
 
+  // gradingId'yi her zaman güncel oku (stale closure'ı önler)
+  const gradingIdRef = useRef(null);
+
   useEffect(() => {
     fetchQuizStatus();
   }, [quizId]);
@@ -34,11 +37,16 @@ export default function Quiz() {
     return () => clearInterval(interval);
   }, [quizStatus]);
 
+  // Grading polling – ref ile güncel gradingId'yi her zaman okur
   useEffect(() => {
-    let interval;
-    if (gradingId && (gradingStatus === 'pending' || gradingStatus === 'grading')) {
-      interval = setInterval(checkGradingStatus, 5000);
-    }
+    if (!gradingId) return;
+    gradingIdRef.current = gradingId;
+
+    if (gradingStatus === 'completed' || gradingStatus === 'failed') return;
+
+    const interval = setInterval(() => {
+      checkGradingStatus(gradingIdRef.current);
+    }, 5000);
     return () => clearInterval(interval);
   }, [gradingId, gradingStatus]);
 
@@ -69,13 +77,16 @@ export default function Quiz() {
     }
   };
 
-  const checkGradingStatus = async () => {
+  const checkGradingStatus = async (currentGradingId) => {
+    const idToUse = currentGradingId || gradingIdRef.current || gradingId;
+    if (!idToUse) return;
     try {
-      const res = await quizzesApi.getGradingStatus(quizId, gradingId);
+      const res = await quizzesApi.getGradingStatus(quizId, idToUse);
       setGradingStatus(res.data.status);
       
       if (res.data.status === 'completed') {
-        fetchResults();
+        // gradingId'yi parametre olarak geç – stale closure'ı önle
+        fetchResults(idToUse);
       }
     } catch (error) {
       console.error(error);

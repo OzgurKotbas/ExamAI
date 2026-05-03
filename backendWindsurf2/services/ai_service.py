@@ -221,55 +221,43 @@ async def grade_open_ended_answer(
     rubric: str | None = None,
     language: str = "tr"
 ) -> Dict[str, Any]:
-    """Grade an open-ended answer using HF (with fallback) or Gemini."""
+    """Grade an open-ended answer using AI (Gemini first, then HF fallback)."""
     try:
         # Build grading prompt
         prompt = _build_grading_prompt(question_text, user_answer, note_content, rubric, language)
-        
-        # Try HF fallback, then Gemini
-        tokens = _get_hf_tokens()
-        models = _get_hf_models()
-        generated_text = ""
-        
-        hf_success = False
-        if tokens:
-            for model in models:
-                for token in tokens:
-                    try:
-                        logger.info(f"Attempting HF grading | model={model}")
-                        generated_text = await _call_hf_api_with_token(model, token, prompt, max_new_tokens=2000)
-                        if generated_text and len(generated_text.strip()) > 10:
-                            hf_success = True
-                            break
-                    except Exception as e:
-                        logger.warning(f"HF grading attempt failed | model={model} | error={str(e)}")
-                        continue
-                if hf_success: break
 
-        if not hf_success:
-            logger.info("HF grading failed or not configured. Falling back to Gemini as requested.")
-            generation_config = {"temperature": 0.3, "max_output_tokens": 2048}
-            response = await _call_gemini_with_retry(prompt, generation_config)
-            generated_text = response.text
+        # Use the same Gemini-first fallback chain as question generation
+        generated_text = await _generate_with_fallback(prompt, max_tokens=2000)
 
-        # Log finally
+        # Log the interaction
         _log_prompt("GRADING", prompt, response=generated_text)
 
-        # Parse JSON response
+        # Parse JSON response – strip markdown fences if present
         try:
-            json_match = re.search(r'\{.*\}', generated_text, re.DOTALL)
+            cleaned = generated_text.strip()
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+            json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
             if json_match:
                 grading_result = json.loads(json_match.group())
             else:
-                grading_result = json.loads(generated_text)
+                grading_result = json.loads(cleaned)
         except json.JSONDecodeError:
+            logger.error(f"Failed to parse grading response: {generated_text[:300]}")
             raise ValueError("Could not parse JSON response from AI")
 
+        # Ensure required fields exist with safe defaults
+        if "score" not in grading_result:
+            grading_result["score"] = 0
+        if "feedback" not in grading_result:
+            grading_result["feedback"] = "Degerlendirme tamamlandi." if language == "tr" else "Evaluation complete."
+
         return grading_result
-        
+
     except Exception as e:
         logger.error(f"Error grading answer: {str(e)}")
         raise ValueError("Failed to grade answer")
+
 
 
 def _build_quiz_prompt(
