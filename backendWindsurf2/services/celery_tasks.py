@@ -9,7 +9,13 @@ from typing import Any, Dict
 
 # Fix for Windows asyncio event loop issues
 import nest_asyncio
-nest_asyncio.apply()
+try:
+    nest_asyncio.apply()
+except Exception:
+    # uvloop (used in production) or other loops that don't support patching.
+    # This is safe to ignore in production as we use uvicorn/uvloop which
+    # manages the loop correctly for the web process.
+    pass
 
 from celery import Task
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -23,6 +29,7 @@ from models.grading import GradingSession
 from models.user import User
 from models.note import Note
 from services.ai_service import generate_questions_from_text, grade_open_ended_answer
+from services.cache_service import set_cached_quiz
 from services.extraction_service import clean_text as clean_extracted_text
 from utils.security import encrypt_text, decrypt_text
 from utils.localization import get_localized_feedback
@@ -123,6 +130,16 @@ def generate_quiz_task(self, quiz_id: str, note_text: str) -> str:
                 quiz.completed_at = func.now()
                 
                 await db.commit()
+
+                await set_cached_quiz(
+                    str(quiz.user_id),
+                    str(quiz.note_id),
+                    quiz.total_questions,
+                    float(quiz.mc_ratio),
+                    quiz.difficulty,
+                    quiz_id=str(quiz.id),
+                    language=language,
+                )
                 
                 logger.info(f"Successfully generated {len(question_objects)} questions for quiz {quiz_id}")
                 return quiz_id
@@ -134,6 +151,9 @@ def generate_quiz_task(self, quiz_id: str, note_text: str) -> str:
                     quiz = await db.get(Quiz, quiz_id)
                     if quiz:
                         quiz.status = "failed"
+                        params = dict(quiz.parameters or {})
+                        params["generation_error"] = str(e)[:500]
+                        quiz.parameters = params
                         await db.commit()
                 except:
                     pass
@@ -144,12 +164,107 @@ def generate_quiz_task(self, quiz_id: str, note_text: str) -> str:
 
     # Run the async function with proper loop management
     try:
-        return asyncio.run(_generate_quiz())
+        return asyncio.run(run_quiz_generation(quiz_id, note_text))
     except Exception as e:
         if "Retry" in str(e) or isinstance(e, celery.exceptions.Retry):
             raise
         logger.error(f"Fatal error in generate_quiz_task: {str(e)}")
         raise
+
+
+async def run_quiz_generation(quiz_id: str, note_text: str) -> str:
+    """Generate quiz questions using a fresh DB engine.
+
+    Shared by Celery workers and the web-process fallback used when the broker
+    cannot accept a task.
+    """
+    from sqlalchemy import func
+
+    task_engine = get_task_engine()
+    async_session = async_sessionmaker(task_engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with async_session() as db:
+        try:
+            quiz = await db.get(Quiz, quiz_id)
+            if not quiz:
+                logger.error(f"Quiz {quiz_id} not found")
+                raise ValueError(f"Quiz {quiz_id} not found")
+
+            quiz.status = "generating"
+            await db.commit()
+
+            logger.info(f"Generating {quiz.total_questions} questions for quiz {quiz_id}")
+
+            language = quiz.parameters.get("language", "tr")
+            weak_topics = quiz.parameters.get("weak_topics", None)
+
+            logger.info(f"Quiz parameters - lang={language}, weak_topics={weak_topics}")
+
+            questions_data = await generate_questions_from_text(
+                text=note_text,
+                total_questions=quiz.total_questions,
+                mc_ratio=float(quiz.mc_ratio),
+                difficulty=quiz.difficulty,
+                language=language,
+                weak_topics=weak_topics,
+            )
+
+            if not questions_data:
+                logger.error(f"No questions generated for quiz {quiz_id}")
+                quiz.status = "failed"
+                await db.commit()
+                raise ValueError("Failed to generate questions")
+
+            question_objects = []
+            for i, q_data in enumerate(questions_data):
+                question = Question(
+                    quiz_id=quiz.id,
+                    type=q_data["type"],
+                    text=q_data["text"],
+                    options=q_data.get("options"),
+                    correct_answer=q_data.get("correct_answer"),
+                    topic=q_data["topic"],
+                    difficulty=q_data["difficulty"],
+                    rubric=q_data.get("rubric"),
+                    order_index=i,
+                )
+                question_objects.append(question)
+
+            db.add_all(question_objects)
+
+            quiz.status = "ready"
+            quiz.completed_at = func.now()
+
+            await db.commit()
+
+            await set_cached_quiz(
+                str(quiz.user_id),
+                str(quiz.note_id),
+                quiz.total_questions,
+                float(quiz.mc_ratio),
+                quiz.difficulty,
+                quiz_id=str(quiz.id),
+                language=language,
+            )
+
+            logger.info(f"Successfully generated {len(question_objects)} questions for quiz {quiz_id}")
+            return quiz_id
+
+        except Exception as e:
+            logger.error(f"Error generating quiz {quiz_id}: {str(e)}")
+            try:
+                quiz = await db.get(Quiz, quiz_id)
+                if quiz:
+                    quiz.status = "failed"
+                    params = dict(quiz.parameters or {})
+                    params["generation_error"] = str(e)[:500]
+                    quiz.parameters = params
+                    await db.commit()
+            except Exception:
+                logger.exception("Failed to persist quiz generation failure state")
+            raise
+        finally:
+            await task_engine.dispose()
 
 
 @celery_app.task(bind=True, base=DatabaseTask, max_retries=2)

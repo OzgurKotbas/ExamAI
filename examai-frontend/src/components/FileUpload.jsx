@@ -286,7 +286,11 @@ export default function FileUpload({ onUploadComplete, onNotesCreated }) {
       }
     } catch (error) {
       console.error('Upload error:', error);
-      toast.error(error.response?.data?.detail?.message || t('uploadError'));
+      const detail = error.response?.data?.detail;
+      const firstFileError = Array.isArray(detail?.errors) && detail.errors.length > 0
+        ? `${detail.errors[0].filename}: ${detail.errors[0].error}`
+        : null;
+      toast.error(firstFileError || detail?.message || t('uploadError'));
     } finally {
       setIsLoading(false);
     }

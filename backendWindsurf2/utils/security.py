@@ -3,6 +3,7 @@ utils/security.py – JWT creation/verification and AES-256-GCM note encryption.
 """
 
 import base64
+import hashlib
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -15,6 +16,27 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def _is_placeholder_secret(value: str | None) -> bool:
+    if not value:
+        return True
+    return value.startswith("changeme") or value in {
+        "your-32-byte-encryption-key-here!!",
+        "BURAYA_FERNET_KEY_GIRINIZ",
+    }
+
+
+def _get_jwt_secret() -> str:
+    """Return a stable JWT secret without silently using the development placeholder."""
+    if not _is_placeholder_secret(settings.SECRET_KEY):
+        return settings.SECRET_KEY
+
+    if not _is_placeholder_secret(settings.NOTE_ENCRYPTION_KEY):
+        logger.warning("SECRET_KEY is missing/placeholder; deriving JWT secret from NOTE_ENCRYPTION_KEY.")
+        return hashlib.sha256(settings.NOTE_ENCRYPTION_KEY.encode("utf-8")).hexdigest()
+
+    raise RuntimeError("SECRET_KEY is not configured")
 
 # ── Password helpers ──────────────────────────────────────────────────────────
 
@@ -45,7 +67,7 @@ def create_access_token(subject: str, expires_delta: timedelta | None = None) ->
             expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         )
         payload = {"sub": subject, "exp": expire, "iat": datetime.now(timezone.utc)}
-        return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+        return jwt.encode(payload, _get_jwt_secret(), algorithm=settings.ALGORITHM)
     except Exception as e:
         logger.error(f"Error creating access token: {str(e)}")
         raise ValueError("Failed to create access token")
@@ -54,7 +76,7 @@ def create_access_token(subject: str, expires_delta: timedelta | None = None) ->
 def decode_access_token(token: str) -> str:
     """Returns the `sub` (user_id) from a valid token, raises JWTError otherwise."""
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(token, _get_jwt_secret(), algorithms=[settings.ALGORITHM])
         sub: str | None = payload.get("sub")
         if sub is None:
             raise JWTError("Token missing subject")
@@ -77,7 +99,10 @@ def _get_key() -> bytes:
     trivially known all-zeros key.
     """
     raw = settings.NOTE_ENCRYPTION_KEY
-    if not raw or raw.startswith("changeme"):
+    if _is_placeholder_secret(raw):
+        if not _is_placeholder_secret(settings.SECRET_KEY):
+            logger.warning("NOTE_ENCRYPTION_KEY is missing/placeholder; deriving note key from SECRET_KEY.")
+            return hashlib.sha256(settings.SECRET_KEY.encode("utf-8")).digest()
         raise RuntimeError(
             "NOTE_ENCRYPTION_KEY is not set or is using the placeholder value. "
             "Generate a key with: python -c \"import secrets, base64; "
@@ -86,8 +111,20 @@ def _get_key() -> bytes:
     try:
         key = base64.b64decode(raw)
     except Exception as e:
+        if not _is_placeholder_secret(settings.SECRET_KEY):
+            logger.warning(
+                "NOTE_ENCRYPTION_KEY is invalid base64; deriving note key from SECRET_KEY. error=%s",
+                e,
+            )
+            return hashlib.sha256(settings.SECRET_KEY.encode("utf-8")).digest()
         raise RuntimeError(f"NOTE_ENCRYPTION_KEY is not valid base64: {e}") from e
     if len(key) != 32:
+        if not _is_placeholder_secret(settings.SECRET_KEY):
+            logger.warning(
+                "NOTE_ENCRYPTION_KEY decoded to %d bytes; deriving note key from SECRET_KEY.",
+                len(key),
+            )
+            return hashlib.sha256(settings.SECRET_KEY.encode("utf-8")).digest()
         raise RuntimeError(
             f"NOTE_ENCRYPTION_KEY must decode to exactly 32 bytes, got {len(key)} bytes."
         )

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   FileText, 
@@ -51,14 +51,16 @@ export default function Dashboard() {
   const [quizToDelete, setQuizToDelete] = useState(null);
   const [analyticsData, setAnalyticsData] = useState(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  // ref: generatingQuizIds'in güncel değerini interval callback'te okumak için
+  const generatingQuizIdsRef = useRef(new Set());
 
   useEffect(() => {
     fetchData();
     // Sync language config with app language
     setQuizConfig(prev => ({ ...prev, language: currentLanguage }));
-    // Poll for generating quizzes status
+    // Poll her 5 saniyede bir quiz durumunu kontrol et
     const interval = setInterval(() => {
-      checkGeneratingQuizzes();
+      checkGeneratingQuizzesRef.current();
     }, 5000);
     return () => clearInterval(interval);
   }, []);
@@ -69,7 +71,14 @@ export default function Dashboard() {
         notesApi.list(),
         quizzesApi.list(),
       ]);
-      setNotes(notesRes.data);
+      const noteItems = Array.isArray(notesRes.data)
+        ? notesRes.data
+        : notesRes.data?.notes || [];
+      setNotes(noteItems.map((note) => ({
+        ...note,
+        id: note.id || note.note_id,
+        filename: note.filename || note.original_filename,
+      })));
       setQuizzes(quizzesRes.data);
       
       // Track generating quizzes
@@ -80,45 +89,57 @@ export default function Dashboard() {
         }
       });
       setGeneratingQuizIds(generating);
+      generatingQuizIdsRef.current = generating;
     } catch (error) {
       toast.error(t('error'));
     }
   };
 
-  const checkGeneratingQuizzes = async () => {
-    if (generatingQuizIds.size === 0) return;
+  const checkGeneratingQuizzes = useCallback(async () => {
+    // Ref üzerinden güncel değeri oku (stale closure problemini önler)
+    if (generatingQuizIdsRef.current.size === 0) return;
     
     try {
       const quizzesRes = await quizzesApi.list();
       const updatedQuizzes = quizzesRes.data;
       
-      // Check if any generating quizzes are now ready
-      generatingQuizIds.forEach(quizId => {
+      // Update generating set
+      const stillGenerating = new Set();
+      generatingQuizIdsRef.current.forEach(quizId => {
         const quiz = updatedQuizzes.find(q => q.id === quizId);
         if (quiz) {
           if (quiz.status === 'ready') {
-            toast.success(`Sınav #${quiz.id?.slice(-6) || '...'} hazır!`, { icon: '🎉' });
-            setGeneratingQuizIds(prev => {
-              const next = new Set(prev);
-              next.delete(quizId);
-              return next;
-            });
+            toast.success(
+              currentLanguage === 'tr'
+                ? `Sınav #${quiz.id?.slice(-6) || '...'} hazır!`
+                : `Quiz #${quiz.id?.slice(-6) || '...'} is ready!`,
+              { icon: '🎉' }
+            );
           } else if (quiz.status === 'failed') {
-            toast.error(`Sınav #${quiz.id?.slice(-6) || '...'} oluşturulamadı`);
-            setGeneratingQuizIds(prev => {
-              const next = new Set(prev);
-              next.delete(quizId);
-              return next;
-            });
+            toast.error(
+              currentLanguage === 'tr'
+                ? `Sınav #${quiz.id?.slice(-6) || '...'} oluşturulamadı`
+                : `Quiz #${quiz.id?.slice(-6) || '...'} failed`
+            );
+          } else {
+            stillGenerating.add(quizId);
           }
         }
       });
       
+      generatingQuizIdsRef.current = stillGenerating;
+      setGeneratingQuizIds(new Set(stillGenerating));
       setQuizzes(updatedQuizzes);
     } catch (error) {
       console.error('Error checking quiz status:', error);
     }
-  };
+  }, [currentLanguage]);
+
+  // Ref'i her zaman güncel callback'i işaretle
+  const checkGeneratingQuizzesRef = useRef(checkGeneratingQuizzes);
+  useEffect(() => {
+    checkGeneratingQuizzesRef.current = checkGeneratingQuizzes;
+  }, [checkGeneratingQuizzes]);
 
   const handleNotesCreated = (newNotes) => {
     fetchData(); // Refresh notes list
@@ -146,7 +167,13 @@ export default function Dashboard() {
       });
       
       // Track this quiz as generating
-      setGeneratingQuizIds(prev => new Set(prev).add(response.data.quiz_id));
+      const newId = response.data.quiz_id;
+      setGeneratingQuizIds(prev => {
+        const next = new Set(prev);
+        next.add(newId);
+        generatingQuizIdsRef.current = next;
+        return next;
+      });
       
       toast.success(t('creating'), { icon: '⏳' });
       setShowQuizModal(false);

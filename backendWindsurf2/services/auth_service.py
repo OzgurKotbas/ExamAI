@@ -6,6 +6,7 @@ import logging
 import random
 import string
 from typing import Tuple
+from urllib.parse import urlencode
 
 import redis
 from fastapi import Depends, Header, HTTPException, status
@@ -40,6 +41,16 @@ def _log_auth_event(event_type: str, email: str, full_name: str = ""):
             f.write(f"[{timestamp}] {event_type.upper()}: {email} | Name: {full_name}\n")
     except Exception as e:
         logger.error(f"Failed to log auth event: {str(e)}")
+
+
+def _safe_picture_url(picture_url: str | None) -> str | None:
+    """Keep Google profile image URL within the current DB column limit."""
+    if not picture_url:
+        return None
+    if len(picture_url) > 512:
+        logger.warning("Google picture_url is too long; skipping profile image storage.")
+        return None
+    return picture_url
 
 
 async def register_user(db: AsyncSession, user_data: UserCreate) -> User:
@@ -152,8 +163,7 @@ def build_google_auth_url() -> str:
             "prompt": "consent"
         }
         
-        query_string = "&".join([f"{k}={v}" for k, v in params.items()])
-        auth_url = f"{base_url}?{query_string}"
+        auth_url = f"{base_url}?{urlencode(params)}"
         
         return auth_url
         
@@ -197,7 +207,7 @@ async def google_login_or_create(db: AsyncSession, code: str) -> Tuple[User, str
             
             email = user_info.get("email")
             full_name = user_info.get("name", "")
-            picture_url = user_info.get("picture", "")
+            picture_url = _safe_picture_url(user_info.get("picture", ""))
             
             if not email:
                 raise ValueError("Failed to get email from Google")

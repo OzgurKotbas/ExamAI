@@ -26,7 +26,7 @@ Aşağıdaki değişkenlerin production değerleriyle güncellenmesi zorunludur:
 ### Frontend (.env)
 - `VITE_API_URL`: Backend'in canlı API adresi.
 
-### OCR (Kritik!)
+222### OCR (Kritik!)
 Proje **Tesseract OCR** kullandığı için, seçilecek sunucuda (veya Docker imajında) aşağıdaki paketlerin yüklü olması gerekir:
 - `tesseract-ocr`
 - `tesseract-ocr-tur` (Türkçe desteği için)

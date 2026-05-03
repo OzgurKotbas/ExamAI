@@ -1,0 +1,47 @@
+# Python caches and build artifacts
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+wheels/
+lib/
+lib64/
+.installed.cfg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment files - never ship local secrets in the Docker image
+.env
+.env.local
+.env.production
+
+# Logs and runtime uploads
+logs/
+*.log
+uploads/
+
+# Test/cache output
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE/OS
+.vscode/
+.idea/
+*.suo
+.DS_Store
+Thumbs.db

@@ -3,6 +3,7 @@ main.py – FastAPI application entry point.
 """
 
 import logging
+import base64
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
@@ -15,8 +16,26 @@ from config import settings
 from database import init_db, close_db
 from utils.logger import get_logger
 from routers import auth, quiz, notes
+from services.ai_service import _get_hf_models, _get_hf_tokens
 
 logger = get_logger(__name__)
+
+
+def _is_configured(value: str | None, *placeholders: str) -> bool:
+    if not value:
+        return False
+    if value.startswith("changeme"):
+        return False
+    return value not in placeholders
+
+
+def _is_valid_note_key(value: str | None) -> bool:
+    if not _is_configured(value, "your-32-byte-encryption-key-here!!", "BURAYA_FERNET_KEY_GIRINIZ"):
+        return False
+    try:
+        return len(base64.b64decode(value)) == 32
+    except Exception:
+        return False
 
 
 @asynccontextmanager
@@ -102,6 +121,20 @@ async def health_check():
         "status": "healthy",
         "app_name": settings.APP_NAME,
         "environment": settings.APP_ENV,
+        "config": {
+            "secret_key": _is_configured(settings.SECRET_KEY),
+            "note_encryption_key": _is_valid_note_key(settings.NOTE_ENCRYPTION_KEY),
+            "note_encryption_fallback": (
+                not _is_valid_note_key(settings.NOTE_ENCRYPTION_KEY)
+                and _is_configured(settings.SECRET_KEY)
+            ),
+            "gemini_api_key": _is_configured(settings.GEMINI_API_KEY),
+            "huggingface_tokens": len(_get_hf_tokens()),
+            "huggingface_models": len(_get_hf_models()),
+            "google_oauth": bool(settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET),
+            "frontend_url": settings.FRONTEND_URL,
+            "allowed_origins": settings.cors_origins,
+        },
     }
 
 

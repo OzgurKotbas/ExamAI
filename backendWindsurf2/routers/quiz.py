@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid as _uuid
 
@@ -19,7 +20,7 @@ from schemas.quiz import (
     QuizSubmission, QuizGradingResponse, GradingStatusResponse
 )
 from services.auth_service import get_current_user
-from services.cache_service import _build_cache_key, get_cached_quiz, set_cached_quiz
+from services.cache_service import _build_cache_key, get_cached_quiz
 from utils.security import decrypt_text
 from utils.localization import get_localized_feedback
 
@@ -113,11 +114,24 @@ async def create_quiz(
         # Cache check – uses the single canonical key builder from cache_service
         cached = await get_cached_quiz(uid, nid, body.total_questions, body.mc_ratio, body.difficulty, language)
         if cached:
-            logger.info(f"Returning cached quiz for user {uid}, note {nid}")
-            return QuizStatusResponse(
-                quiz_id=_uuid.UUID(cached["quiz_id"]),
-                status="ready",
-                message="Quiz fetched from cache.",
+            cached_quiz_id = _uuid.UUID(cached["quiz_id"])
+            cached_quiz = await db.get(Quiz, cached_quiz_id)
+            question_count_res = await db.execute(
+                select(func.count(Question.id)).where(Question.quiz_id == cached_quiz_id)
+            )
+            cached_question_count = question_count_res.scalar() or 0
+            if cached_quiz and cached_quiz.status == "ready" and cached_question_count > 0:
+                logger.info(f"Returning cached ready quiz for user {uid}, note {nid}")
+                return QuizStatusResponse(
+                    quiz_id=cached_quiz_id,
+                    status="ready",
+                    message="Quiz fetched from cache.",
+                )
+            logger.warning(
+                "Ignoring stale quiz cache | quiz_id=%s | status=%s | questions=%s",
+                cached_quiz_id,
+                getattr(cached_quiz, "status", None),
+                cached_question_count,
             )
 
         # Canonical cache key (same function as cache_service uses internally)
@@ -144,9 +158,6 @@ async def create_quiz(
 
         logger.info(f"Created quiz {quiz.id} for user {uid}, note {nid}")
 
-        # Redis cache'e kaydet (commit öncesi ID'ye ihtiyacımız var, flush yeterli)
-        await set_cached_quiz(uid, nid, body.total_questions, body.mc_ratio, body.difficulty, quiz_id=str(quiz.id), language=language)
-
         # Önce commit et – Celery worker quiz kaydını DB'de görmeli
         await db.commit()
 
@@ -155,15 +166,30 @@ async def create_quiz(
             from services.celery_tasks import generate_quiz_task
             generate_quiz_task.delay(str(quiz.id), cleaned_text)
         except Exception as e:
-            logger.error(f"Failed to enqueue Celery task for quiz {quiz.id}: {str(e)}")
-            # Quiz kaydı zaten commit'lendi; sadece status'u failed yap
-            quiz.status = "failed"
-            await db.commit()
-            raise HTTPException(
-                status.HTTP_500_INTERNAL_SERVER_ERROR,
-                "Failed to start quiz generation. Please try again."
-            )
-
+            logger.error(f"Failed to enqueue Celery task for quiz {quiz.id}; using local fallback: {str(e)}")
+            try:
+                from services.celery_tasks import run_quiz_generation
+                task = asyncio.create_task(run_quiz_generation(str(quiz.id), cleaned_text))
+                task.add_done_callback(
+                    lambda t: logger.error("Local quiz generation fallback failed", exc_info=t.exception())
+                    if t.exception()
+                    else logger.info(f"Local quiz generation fallback completed for quiz {quiz.id}")
+                )
+            except Exception as fallback_error:
+                logger.error(f"Failed to schedule local quiz generation fallback for quiz {quiz.id}: {fallback_error}")
+                quiz.status = "failed"
+                await db.commit()
+                raise HTTPException(
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    "Failed to start quiz generation. Please try again."
+                )
+            else:
+                logger.info(f"Scheduled local quiz generation fallback for quiz {quiz.id}")
+                return QuizStatusResponse(
+                    quiz_id=quiz.id,
+                    status="pending",
+                    message="Quiz is being generated. Poll /quizzes/{quiz_id}/status for updates.",
+                )
         return QuizStatusResponse(
             quiz_id=quiz.id,
             status="pending",
@@ -665,11 +691,11 @@ async def get_quiz_analytics(
         completed_grading_count = grading_count_res.scalar() or 0
 
         # Get all answers with topic info for this user
+        # We fetch each answer individually (score + topic) to compute correct/total per topic
         answers_res = await db.execute(
             select(
                 Question.topic,
                 Answer.score,
-                func.count(Answer.id).label("count")
             )
             .join(Answer, Answer.question_id == Question.id)
             .where(
@@ -677,24 +703,27 @@ async def get_quiz_analytics(
                 Answer.score.isnot(None),
                 Question.quiz_id.in_(quiz_ids)
             )
-            .group_by(Question.topic, Answer.score)
         )
         rows = answers_res.fetchall()
 
         # Aggregate per-topic stats
+        # accuracy = correct_count / total_count * 100
+        # A question is "correct" if score > 0
         topic_data: dict = {}
         total_score_sum = 0.0
         total_ans_count = 0
 
-        for topic, score, count in rows:
+        for topic, score in rows:
             if not topic:
                 continue
             if topic not in topic_data:
-                topic_data[topic] = {"total_score": 0.0, "total_count": 0, "correct_count": 0}
-            topic_data[topic]["total_score"] += (score or 0) * count
-            topic_data[topic]["total_count"] += count
-            total_score_sum += (score or 0) * count
-            total_ans_count += count
+                topic_data[topic] = {"total_count": 0, "correct_count": 0, "raw_score_sum": 0.0}
+            topic_data[topic]["total_count"] += 1
+            topic_data[topic]["raw_score_sum"] += (score or 0)
+            if (score or 0) > 0:
+                topic_data[topic]["correct_count"] += 1
+            total_score_sum += (score or 0)
+            total_ans_count += 1
 
         # Build topic stats list
         topic_stats = []
@@ -704,13 +733,8 @@ async def get_quiz_analytics(
         for topic, data in topic_data.items():
             if data["total_count"] == 0:
                 continue
-            # Average accuracy % for this topic (score is already 0-q_score proportional)
-            avg_score = data["total_score"] / data["total_count"]
-            # Normalize to 0-100 scale (q_score is ~10 for 10 questions)
-            # We estimate max q_score as 100/total_questions, but we don't know total here
-            # Use relative: if avg_score > 0, treat raw avg_score as percentage directly
-            # (since scores are stored proportionally, avg across questions gives a good signal)
-            accuracy_pct = min(round(avg_score, 1), 100.0)
+            # accuracy = doğru cevap sayısı / toplam soru sayısı * 100
+            accuracy_pct = round((data["correct_count"] / data["total_count"]) * 100, 1)
 
             topic_stat = {
                 "topic": topic,

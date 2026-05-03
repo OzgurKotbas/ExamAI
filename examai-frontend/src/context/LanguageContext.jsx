@@ -155,6 +155,19 @@ const translations = {
     quizLangEnglish: '🇬🇧 English',
     quizLangDesc: 'Sorular ve cevaplar seçilen dilde hazırlanacaktır.',
     
+    // Categories
+    uncategorized: 'Kategorisiz',
+    quizzesCount: 'sınav',
+    noQuizzesYet: 'Henüz sınav yok',
+    noQuizzesInCategory: 'Bu kategoride henüz sınav bulunmuyor.',
+    categoryNameLabel: 'Kategori Adı',
+    categoryNamePlaceholder: 'Örn: Matematik, Fizik, Tarih...',
+    editCategory: 'Kategori Düzenle',
+    save: 'Kaydet',
+    edit: 'Düzenle',
+    delete: 'Sil',
+    questionsLabel: 'soru',
+    
     // Analytics
     analytics: 'Analitik',
     analyticsTitle: 'Performans Raporu',
@@ -330,6 +343,19 @@ const translations = {
     quizLangTurkish: '🇹🇷 Turkish',
     quizLangEnglish: '🇬🇧 English',
     quizLangDesc: 'Questions and answers will be prepared in the selected language.',
+    
+    // Categories
+    uncategorized: 'Uncategorized',
+    quizzesCount: 'quiz',
+    noQuizzesYet: 'No quizzes yet',
+    noQuizzesInCategory: 'No quizzes in this category yet.',
+    categoryNameLabel: 'Category Name',
+    categoryNamePlaceholder: 'E.g: Math, Physics, History...',
+    editCategory: 'Edit Category',
+    save: 'Save',
+    edit: 'Edit',
+    delete: 'Delete',
+    questionsLabel: 'questions',
     
     // Analytics
     analytics: 'Analytics',

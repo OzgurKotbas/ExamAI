@@ -35,18 +35,25 @@ export default function AuthCallback() {
         is_oauth_user: true,
       };
 
-      // Login the user
-      login(token, user);
-      
       if (isNew) {
-        toast.success('Kaydınız Google ile başarıyla oluşturuldu!');
-        navigate('/register');
+        // Yeni kullanıcı: henüz sistemde kayıtlı değil → Register sayfasına yönlendir
+        // Google bilgilerini query param olarak taşı
+        const registerParams = new URLSearchParams({
+          from: 'google',
+          token: token,
+          email: email,
+          name: name,
+          user_id: userId,
+        });
+        toast('Google hesabınız bulundu. Lütfen kaydı tamamlayın.', { icon: '👋' });
+        navigate(`/register?${registerParams.toString()}`);
       } else {
+        // Mevcut kullanıcı: oturum aç ve dashboard'a yönlendir
+        login(token, user);
         toast.success('Google ile giriş başarılı!');
         navigate('/dashboard');
       }
     } else {
-
       toast.error('Giriş bilgileri eksik');
       navigate('/login');
     }

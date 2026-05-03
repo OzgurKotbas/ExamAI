@@ -7,6 +7,7 @@ import json
 import re
 import asyncio
 import random
+from dataclasses import dataclass
 from typing import List, Dict, Any
 
 import httpx
@@ -17,11 +18,25 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class AIProviderError:
+    provider: str
+    error: str
+
+
 def _get_hf_tokens() -> List[str]:
     """Parse HUGGINGFACE_API_TOKENS from config."""
-    if not settings.HUGGINGFACE_API_TOKENS:
-        return []
-    return [t.strip() for t in settings.HUGGINGFACE_API_TOKENS.split(",") if t.strip()]
+    raw_tokens = [
+        settings.HUGGINGFACE_API_TOKENS,
+        settings.HUGGINGFACE_API_KEY,
+        settings.HF_TOKEN,
+    ]
+    tokens: list[str] = []
+    for raw in raw_tokens:
+        if not raw:
+            continue
+        tokens.extend([t.strip() for t in raw.split(",") if t.strip()])
+    return list(dict.fromkeys(tokens))
 
 
 def _get_hf_models() -> List[str]:
@@ -98,14 +113,35 @@ async def _call_hf_api_with_token(model_id: str, token: str, prompt: str, max_ne
 
 
 async def _generate_with_fallback(prompt: str, max_tokens: int = 4000) -> str:
-    """Try HF models/tokens, then fall back to Gemini as a last resort."""
+    """Try Gemini first, then Hugging Face models/tokens as fallback."""
+    errors: list[AIProviderError] = []
+
+    if settings.GEMINI_API_KEY:
+        try:
+            logger.info("Attempting Gemini generation first.")
+            generation_config = {
+                "temperature": 0.7,
+                "max_output_tokens": 8192,
+            }
+            response = await _call_gemini_with_retry(prompt, generation_config)
+            text = (response.text or "").strip()
+            if text:
+                return text
+            errors.append(AIProviderError("gemini", "empty response"))
+        except Exception as e:
+            logger.warning("Gemini generation failed; trying Hugging Face fallback. error=%s", e)
+            errors.append(AIProviderError("gemini", str(e)))
+    else:
+        logger.warning("Gemini API key not configured. Trying Hugging Face fallback.")
+        errors.append(AIProviderError("gemini", "GEMINI_API_KEY not configured"))
+
     tokens = _get_hf_tokens()
     models = _get_hf_models()
 
     if not tokens:
         logger.warning("No HF tokens configured. Skipping HF attempts.")
+        errors.append(AIProviderError("huggingface", "HUGGINGFACE_API_TOKENS not configured"))
     else:
-        # Try HF fallback with all available models and tokens
         for model in models:
             for token in tokens:
                 try:
@@ -115,16 +151,11 @@ async def _generate_with_fallback(prompt: str, max_tokens: int = 4000) -> str:
                         return text
                 except Exception as e:
                     logger.warning(f"HF attempt failed | model={model} | error={str(e)}")
+                    errors.append(AIProviderError(f"huggingface:{model}", str(e)))
                     continue
 
-    # Fallback to Gemini
-    logger.info("All HF attempts failed or no HF config. Falling back to Gemini as requested.")
-    generation_config = {
-        "temperature": 0.7,
-        "max_output_tokens": 8192,
-    }
-    response = await _call_gemini_with_retry(prompt, generation_config)
-    return response.text
+    error_text = "; ".join(f"{item.provider}: {item.error}" for item in errors[-5:])
+    raise ValueError(f"All AI providers failed. {error_text}")
 
 
 async def generate_questions_from_text(
@@ -160,11 +191,14 @@ async def generate_questions_from_text(
         # Parse JSON response
         try:
             # Try to find JSON array
-            json_match = re.search(r'\[.*\]', generated_text, re.DOTALL)
+            cleaned_response = generated_text.strip()
+            cleaned_response = re.sub(r"^```(?:json)?\s*", "", cleaned_response)
+            cleaned_response = re.sub(r"\s*```$", "", cleaned_response)
+            json_match = re.search(r'\[.*\]', cleaned_response, re.DOTALL)
             if json_match:
                 questions = json.loads(json_match.group())
             else:
-                questions = json.loads(generated_text)
+                questions = json.loads(cleaned_response)
         except json.JSONDecodeError:
             logger.error(f"Failed to parse AI response: {generated_text[:500]}...")
             raise ValueError("Could not parse JSON response from AI")

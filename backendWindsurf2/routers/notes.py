@@ -211,8 +211,10 @@ async def upload_notes(
             )
 
             uploaded_notes.append({
+                "id": note_id,
                 "note_id": note_id,
                 "filename": file.filename,
+                "original_filename": file.filename,
             })
 
         except Exception as exc:
@@ -265,7 +267,9 @@ async def list_notes(
         "notes": [
             {
                 "note_id": str(n.id),
+                "id": str(n.id),
                 "context_id": n.context_id,
+                "filename": n.original_filename,
                 "original_filename": n.original_filename,
                 "file_type": n.file_type,
                 "created_at": n.created_at.isoformat() if n.created_at else None,

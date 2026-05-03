@@ -47,6 +47,8 @@ class Settings(BaseSettings):
 
     # ── Hugging Face ───────────────────────────────────────────────────────────
     HUGGINGFACE_API_TOKENS: str = ""
+    HUGGINGFACE_API_KEY: str = ""
+    HF_TOKEN: str = ""
     HUGGINGFACE_MODELS: str = "Qwen/Qwen2.5-72B-Instruct,Qwen/Qwen2.5-7B-Instruct,mistralai/Mistral-Nemo-Instruct-2407,microsoft/Phi-3.5-mini-instruct,01-ai/Yi-1.5-34B-Chat"
 
     # ── Specific Model URLs (Optional Overrides) ──────────────────────────────

@@ -28,12 +28,12 @@ export default function QuizCategories({
       const saved = localStorage.getItem('quizCategories');
       return saved ? JSON.parse(saved) : [
         { id: 'all', name: t('allQuizzes'), icon: 'BookOpen', isDefault: true },
-        { id: 'uncategorized', name: 'Kategorisiz', icon: 'Folder', isDefault: true }
+        { id: 'uncategorized', name: t('uncategorized'), icon: 'Folder', isDefault: true }
       ];
     }
     return [
       { id: 'all', name: t('allQuizzes'), icon: 'BookOpen', isDefault: true },
-      { id: 'uncategorized', name: 'Kategorisiz', icon: 'Folder', isDefault: true }
+      { id: 'uncategorized', name: t('uncategorized'), icon: 'Folder', isDefault: true }
     ];
   });
   
@@ -61,7 +61,7 @@ export default function QuizCategories({
 
   const createCategory = () => {
     if (!newCategoryName.trim()) {
-      toast.error('Kategori adı gerekli');
+      toast.error(t('categoryNameLabel'));
       return;
     }
     
@@ -75,7 +75,7 @@ export default function QuizCategories({
     setCategories([...categories, newCategory]);
     setNewCategoryName('');
     setShowCreateModal(false);
-    toast.success('Kategori oluşturuldu');
+    toast.success(currentLanguage === 'tr' ? 'Kategori oluşturuldu' : 'Category created');
   };
 
   const updateCategory = (id, newName) => {
@@ -83,12 +83,12 @@ export default function QuizCategories({
       cat.id === id ? { ...cat, name: newName } : cat
     ));
     setEditingCategory(null);
-    toast.success('Kategori güncellendi');
+    toast.success(currentLanguage === 'tr' ? 'Kategori güncellendi' : 'Category updated');
   };
 
   const deleteCategory = (id) => {
     if (id === 'all' || id === 'uncategorized') {
-      toast.error('Bu kategori silinemez');
+      toast.error(currentLanguage === 'tr' ? 'Bu kategori silinemez' : 'This category cannot be deleted');
       return;
     }
     
@@ -105,12 +105,12 @@ export default function QuizCategories({
     if (selectedCategory === id) {
       setSelectedCategory('all');
     }
-    toast.success('Kategori silindi');
+    toast.success(currentLanguage === 'tr' ? 'Kategori silindi' : 'Category deleted');
   };
 
   const assignQuizToCategory = (quizId, categoryId) => {
     setQuizCategories({ ...quizCategories, [quizId]: categoryId });
-    toast.success('Sınav kategoriye eklendi');
+    toast.success(currentLanguage === 'tr' ? 'Sınav kategoriye eklendi' : 'Quiz added to category');
   };
 
   const getFilteredQuizzes = () => {
@@ -233,7 +233,7 @@ export default function QuizCategories({
                               className="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
                             >
                               <Edit2 className="w-3 h-3" />
-                              Düzenle
+                              {t('edit')}
                             </button>
                             <button
                               onClick={(e) => {
@@ -244,7 +244,7 @@ export default function QuizCategories({
                               className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
                             >
                               <Trash2 className="w-3 h-3" />
-                              Sil
+                              {t('delete')}
                             </button>
                           </div>
                         </>
@@ -266,7 +266,7 @@ export default function QuizCategories({
               {categories.find(c => c.id === selectedCategory)?.name}
             </h3>
             <span className="text-sm text-gray-500 dark:text-gray-400">
-              {filteredQuizzes.length} sınav
+              {filteredQuizzes.length} {t('quizzesCount')}
             </span>
           </div>
           
@@ -275,8 +275,8 @@ export default function QuizCategories({
               <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <BookOpen className="w-8 h-8 text-gray-400" />
               </div>
-              <h3 className="text-lg font-medium text-gray-900 mb-2">Henüz sınav yok</h3>
-              <p className="text-gray-500 mb-4">Bu kategoride henüz sınav bulunmuyor.</p>
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">{t('noQuizzesYet')}</h3>
+              <p className="text-gray-500 dark:text-gray-400 mb-4">{t('noQuizzesInCategory')}</p>
               <button
                 onClick={() => onTabChange('upload')}
                 className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors"
@@ -323,7 +323,7 @@ export default function QuizCategories({
                           )}
                         </div>
                         <p className="text-sm text-gray-500">
-                          {quiz.total_questions} soru • {quiz.mc_ratio === 1.0 ? (currentLanguage === 'tr' ? 'Test' : 'Test') : (quiz.mc_ratio === 0.0 ? (currentLanguage === 'tr' ? 'Klasik' : 'Classic') : (currentLanguage === 'tr' ? 'Karma' : 'Mixed'))} • {quiz.difficulty === 'easy' ? t('easy') : quiz.difficulty === 'hard' ? t('hard') : t('medium')}
+                          {quiz.total_questions} {t('questionsLabel')} • {quiz.mc_ratio === 1.0 ? (currentLanguage === 'tr' ? 'Test' : 'Test') : (quiz.mc_ratio === 0.0 ? (currentLanguage === 'tr' ? 'Klasik' : 'Classic') : (currentLanguage === 'tr' ? 'Karma' : 'Mixed'))} • {quiz.difficulty === 'easy' ? t('easy') : quiz.difficulty === 'hard' ? t('hard') : t('medium')}
                         </p>
                         <p className="text-xs text-gray-400 mt-1">
                           {quiz.created_at ? new Date(quiz.created_at).toLocaleDateString(currentLanguage === 'tr' ? 'tr-TR' : 'en-US', {
@@ -374,12 +374,12 @@ export default function QuizCategories({
             
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Kategori Adı</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">{t('categoryNameLabel')}</label>
                 <input 
                   type="text" 
                   value={newCategoryName}
                   onChange={(e) => setNewCategoryName(e.target.value)}
-                  placeholder="Örn: Matematik, Fizik, Tarih..."
+                  placeholder={t('categoryNamePlaceholder')}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                   autoFocus
                 />
@@ -411,11 +411,11 @@ export default function QuizCategories({
       {editingCategory && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
-            <h2 className="text-xl font-bold text-gray-900 mb-4">Kategori Düzenle</h2>
+            <h2 className="text-xl font-bold text-gray-900 mb-4">{t('editCategory')}</h2>
             
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Kategori Adı</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">{t('categoryNameLabel')}</label>
                 <input 
                   type="text" 
                   defaultValue={editingCategory.name}
@@ -437,7 +437,7 @@ export default function QuizCategories({
                 onClick={() => updateCategory(editingCategory.id, editingCategory.name)}
                 className="flex-1 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-lg font-medium hover:from-indigo-700 hover:to-purple-700 transition-all"
               >
-                Kaydet
+                {t('save')}
               </button>
             </div>
           </div>
