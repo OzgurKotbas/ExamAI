@@ -428,26 +428,55 @@ def _extract_relevant_context(question_text: str, note_content: str, max_chars: 
 
 
 async def _call_gemini_with_retry(prompt: str, generation_config: Dict[str, Any], max_retries: int = 3, api_key: str | None = None):
-    """Call Gemini API with exponential backoff."""
+    """Call Gemini API with exponential backoff and model fallbacks."""
     effective_api_key = api_key or settings.GEMINI_API_KEY
     if not effective_api_key:
         raise ValueError("Gemini API key not configured")
         
     genai.configure(api_key=effective_api_key)
-    model = genai.GenerativeModel(settings.GEMINI_MODEL)
     
-    retry_delay = 5
-    for attempt in range(max_retries + 1):
+    # List of models to try in order if 404 occurs
+    primary_model = settings.GEMINI_MODEL
+    fallback_models = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
+    
+    # Ensure primary_model is first and avoid duplicates
+    models_to_try = [primary_model]
+    for m in fallback_models:
+        if m not in models_to_try:
+            models_to_try.append(m)
+
+    last_exception = None
+    
+    for model_name in models_to_try:
         try:
-            return await model.generate_content_async(prompt, generation_config=generation_config)
-        except (exceptions.ResourceExhausted, exceptions.ServiceUnavailable) as e:
-            if attempt < max_retries:
-                wait_time = (retry_delay * (2 ** attempt)) + (random.random() * 2)
-                await asyncio.sleep(wait_time)
-            else:
-                raise
-        except Exception:
-            raise
+            logger.info(f"Attempting Gemini call with model: {model_name}")
+            model = genai.GenerativeModel(model_name)
+            
+            retry_delay = 5
+            for attempt in range(max_retries + 1):
+                try:
+                    return await model.generate_content_async(prompt, generation_config=generation_config)
+                except (exceptions.ResourceExhausted, exceptions.ServiceUnavailable) as e:
+                    if attempt < max_retries:
+                        wait_time = (retry_delay * (2 ** attempt)) + (random.random() * 2)
+                        logger.warning(f"Gemini rate limit/service error. Retrying in {wait_time:.2f}s...")
+                        await asyncio.sleep(wait_time)
+                    else:
+                        raise
+            # If successful, return immediately
+            break 
+            
+        except exceptions.NotFound as e:
+            logger.warning(f"Gemini model {model_name} not found (404). Trying next fallback...")
+            last_exception = e
+            continue # Try next model
+        except Exception as e:
+            logger.error(f"Unexpected error with Gemini model {model_name}: {str(e)}")
+            last_exception = e
+            raise # For non-404 errors, we probably want to fail fast or handle differently
+            
+    if last_exception:
+        raise last_exception
 
 
 def _format_questions(questions: List[Dict[str, Any]], mc_count: int, oe_count: int) -> List[Dict[str, Any]]:
