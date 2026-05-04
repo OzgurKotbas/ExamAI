@@ -10,11 +10,33 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+# Ensure REDIS_URL has required parameters for SSL if using rediss://
+redis_url = settings.REDIS_URL
+if redis_url.startswith("rediss://") and "ssl_cert_reqs" not in redis_url:
+    # Append the parameter to the URL
+    separator = "&" if "?" in redis_url else "?"
+    redis_url = f"{redis_url}{separator}ssl_cert_reqs=none"
+    logger.info("Modified REDIS_URL for SSL compatibility")
+
+# CRITICAL: Disable uvloop for Celery worker to avoid asyncio.run() conflicts
+if os.environ.get("FORKED_BY_MULTIPROCESSING") == "1":
+    try:
+        import asyncio
+        # Try to prevent uvloop from taking over if it's installed
+        try:
+            import uvloop
+            asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+            logger.info("Disabled uvloop policy for Celery worker")
+        except ImportError:
+            pass
+    except Exception as e:
+        logger.warning(f"Could not adjust event loop policy: {e}")
+
 # Configure Celery
 celery_app = Celery(
     "examai",
-    broker=settings.REDIS_URL,
-    backend=settings.REDIS_URL,
+    broker=redis_url,
+    backend=redis_url,
     include=["services.celery_tasks"]
 )
 
@@ -33,6 +55,7 @@ celery_app.conf.update(
     result_expires=3600,  # 1 hour
     task_routes={
         "services.celery_tasks.generate_quiz_task": {"queue": "quiz_generation"},
+        "services.celery_tasks.grade_quiz_task": {"queue": "default"},
     },
     task_default_queue="default",
     task_default_exchange="default",

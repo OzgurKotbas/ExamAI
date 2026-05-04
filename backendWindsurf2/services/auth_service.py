@@ -24,7 +24,12 @@ from database import get_db
 logger = logging.getLogger(__name__)
 
 # Redis client for password reset codes
-redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+_redis_url = settings.REDIS_URL
+if _redis_url.startswith("rediss://") and "ssl_cert_reqs" not in _redis_url:
+    _sep = "&" if "?" in _redis_url else "?"
+    _redis_url = f"{_redis_url}{_sep}ssl_cert_reqs=none"
+
+redis_client = redis.from_url(_redis_url, decode_responses=True)
 
 def _log_auth_event(event_type: str, email: str, full_name: str = ""):
     """Log authentication events (register, login) to a file."""

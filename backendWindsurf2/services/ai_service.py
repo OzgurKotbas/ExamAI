@@ -88,7 +88,7 @@ async def _call_hf_api_with_token(model_id: str, token: str, prompt: str, max_ne
         "stream": False
     }
 
-    async with httpx.AsyncClient(timeout=150.0) as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             response = await client.post(url, json=payload, headers=headers)
             
@@ -113,12 +113,33 @@ async def _call_hf_api_with_token(model_id: str, token: str, prompt: str, max_ne
 
 
 async def _generate_with_fallback(prompt: str, max_tokens: int = 4000) -> str:
-    """Try Gemini first, then Hugging Face models/tokens as fallback."""
+    """Try Hugging Face first, then Gemini as fallback."""
     errors: list[AIProviderError] = []
 
+    tokens = _get_hf_tokens()
+    models = _get_hf_models()
+
+    # 1. Try Hugging Face First
+    if tokens and models:
+        for model in models:
+            for token in tokens:
+                try:
+                    logger.info(f"Attempting HF generation (Primary) | model={model}")
+                    text = await _call_hf_api_with_token(model, token, prompt, max_tokens)
+                    if text and len(text.strip()) > 10: # Ensure we got a meaningful response
+                        return text
+                except Exception as e:
+                    logger.warning(f"HF attempt failed | model={model} | error={str(e)}")
+                    errors.append(AIProviderError(f"huggingface:{model}", str(e)))
+                    continue
+    else:
+        logger.warning("HF tokens or models not configured. Skipping HF attempts.")
+        errors.append(AIProviderError("huggingface", "Not configured"))
+
+    # 2. Gemini Fallback
     if settings.GEMINI_API_KEY:
         try:
-            logger.info("Attempting Gemini generation first.")
+            logger.info("HF failed or not configured. Attempting Gemini fallback.")
             generation_config = {
                 "temperature": 0.7,
                 "max_output_tokens": 8192,
@@ -129,30 +150,11 @@ async def _generate_with_fallback(prompt: str, max_tokens: int = 4000) -> str:
                 return text
             errors.append(AIProviderError("gemini", "empty response"))
         except Exception as e:
-            logger.warning("Gemini generation failed; trying Hugging Face fallback. error=%s", e)
+            logger.error("Gemini generation failed as well. error=%s", e)
             errors.append(AIProviderError("gemini", str(e)))
     else:
-        logger.warning("Gemini API key not configured. Trying Hugging Face fallback.")
+        logger.warning("Gemini API key not configured.")
         errors.append(AIProviderError("gemini", "GEMINI_API_KEY not configured"))
-
-    tokens = _get_hf_tokens()
-    models = _get_hf_models()
-
-    if not tokens:
-        logger.warning("No HF tokens configured. Skipping HF attempts.")
-        errors.append(AIProviderError("huggingface", "HUGGINGFACE_API_TOKENS not configured"))
-    else:
-        for model in models:
-            for token in tokens:
-                try:
-                    logger.info(f"Attempting HF generation | model={model} | token={token[:8]}...")
-                    text = await _call_hf_api_with_token(model, token, prompt, max_tokens)
-                    if text and len(text.strip()) > 10: # Ensure we got a meaningful response
-                        return text
-                except Exception as e:
-                    logger.warning(f"HF attempt failed | model={model} | error={str(e)}")
-                    errors.append(AIProviderError(f"huggingface:{model}", str(e)))
-                    continue
 
     error_text = "; ".join(f"{item.provider}: {item.error}" for item in errors[-5:])
     raise ValueError(f"All AI providers failed. {error_text}")

@@ -389,22 +389,16 @@ async def submit_quiz_for_grading(
                 f"Quiz is not ready for submission (status: {quiz.status})."
             )
         
-        # Validate that all questions have answers
+        # Fetch all questions
         result = await db.execute(
             select(Question).where(Question.quiz_id == quiz_id)
         )
         questions = result.scalars().all()
         
-        question_ids = {str(q.id) for q in questions}
         answer_ids = {str(a.question_id) for a in body.answers}
-        
-        missing_answers = question_ids - answer_ids
-        if missing_answers:
-            logger.warning(f"Quiz submission failed: Missing answers for {len(missing_answers)} questions")
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                f"Missing answers for {len(missing_answers)} questions."
-            )
+        missing_count = len([q for q in questions if str(q.id) not in answer_ids])
+        if missing_count:
+            logger.info(f"Quiz submission: {missing_count} questions left unanswered — treating as empty (score 0)")
         
         # Check if any questions require AI grading
         has_open_ended = any(q.type == "open_ended" for q in questions)
@@ -437,7 +431,7 @@ async def submit_quiz_for_grading(
                 score = q_score if user_ans_clean == correct_ans_clean else 0
                 
                 # Localized feedback
-                feedback = get_localized_feedback(quiz_lang, score, question.correct_answer)
+                feedback = get_localized_feedback(quiz_lang, score, question.correct_answer, question.options)
                 
                 answer = Answer(
                     user_id=current_user.id,
@@ -725,6 +719,8 @@ async def get_quiz_analytics(
             total_score_sum += (score or 0)
             total_ans_count += 1
 
+        total_correct_count = sum(d["correct_count"] for d in topic_data.values())
+
         # Build topic stats list
         topic_stats = []
         weak_topics = []
@@ -751,7 +747,8 @@ async def get_quiz_analytics(
         # Sort by accuracy ascending (weakest first)
         topic_stats.sort(key=lambda x: x["accuracy"])
 
-        overall_score = round(total_score_sum / total_ans_count, 1) if total_ans_count > 0 else 0
+        # Genel Ortalama = (Toplam Doğru / Toplam Soru) * 100
+        overall_score = round((total_correct_count / total_ans_count) * 100, 1) if total_ans_count > 0 else 0
 
         logger.info(f"Analytics for user {current_user.id}: {total_ans_count} answers, {len(topic_stats)} topics")
 

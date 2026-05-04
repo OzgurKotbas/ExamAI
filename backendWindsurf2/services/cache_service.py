@@ -19,7 +19,12 @@ async def get_redis() -> aioredis.Redis:
     global _redis
     if _redis is None:
         try:
-            _redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+            redis_url = settings.REDIS_URL
+            if redis_url.startswith("rediss://") and "ssl_cert_reqs" not in redis_url:
+                separator = "&" if "?" in redis_url else "?"
+                redis_url = f"{redis_url}{separator}ssl_cert_reqs=none"
+                
+            _redis = aioredis.from_url(redis_url, decode_responses=True)
             logger.info("Redis connection established")
         except Exception as e:
             logger.error(f"Failed to connect to Redis: {str(e)}")

@@ -348,158 +348,164 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
+
 @celery_app.task(bind=True, base=DatabaseTask, max_retries=3, default_retry_delay=60)
 def grade_quiz_task(self, grading_id: str, quiz_id: str, user_answers: Dict[str, str]) -> str:
     """
     Grade quiz answers using AI for open-ended questions.
-    
-    Args:
-        grading_id: UUID of the grading session
-        quiz_id: UUID of the quiz being graded
-        user_answers: Dictionary mapping question_id to user_answer
-        
-    Returns:
-        grading_id: UUID of the completed grading session
+    Delegates all async work to run_quiz_grading() to avoid nested-closure
+    issues with asyncio.run() + uvloop in production.
     """
-    from sqlalchemy import select
-    from sqlalchemy.orm import selectinload
-    from datetime import datetime, timezone
-    
     logger.info(f"Starting quiz grading for grading_id: {grading_id}")
-    
-    async def _grade_quiz():
-        task_engine = get_task_engine()
-        async_session = async_sessionmaker(task_engine, class_=AsyncSession, expire_on_commit=False)
-        
-        async with async_session() as db:
-            try:
-                # Get grading session
-                grading = await db.get(GradingSession, grading_id)
-                if not grading:
-                    raise ValueError(f"Grading session {grading_id} not found")
-                
-                # Update status to grading
-                grading.status = "grading"
-                await db.commit()
-                
-                # Get quiz with questions and note
-                result = await db.execute(
-                    select(Quiz)
-                    .where(Quiz.id == quiz_id)
-                    .options(selectinload(Quiz.questions).selectinload(Question.quiz))
-                )
-                quiz = result.scalar_one_or_none()
-                
-                if not quiz:
-                    raise ValueError(f"Quiz {quiz_id} not found")
-                
-                # Get note content for context
-                from models.note import Note
-                note_result = await db.execute(select(Note).where(Note.id == quiz.note_id))
-                note = note_result.scalar_one_or_none()
-                
-                if not note:
-                    raise ValueError(f"Note {quiz.note_id} not found")
-                
-                # Decrypt note content
-                note_content = decrypt_text(note.cleaned_text_encrypted)
-                
-                # Calculate point per question
-                q_score = 100.0 / len(quiz.questions) if quiz.questions else 0
-                
-                total_score = 0.0
-                graded_count = 0
-                
-                # Process each answer
-                for question in quiz.questions:
-                    question_id_str = str(question.id)
-                    
-                    if question_id_str not in user_answers:
-                        continue
-                    
-                    user_answer = user_answers[question_id_str]
-                    
-                    # Create or update answer record
-                    answer = Answer(
-                        user_id=grading.user_id,
-                        question_id=question.id,
-                        grading_id=grading.id,
-                        user_answer=user_answer,
-                        is_ai_graded=(question.type == "open_ended")
-                    )
-                    db.add(answer)
-                    
-                    # Grade based on question type
-                    quiz_lang = quiz.parameters.get('language', 'tr')
-                    
-                    if question.type == "multiple_choice":
-                        # Simple correct/incorrect grading
-                        is_correct = user_answer.strip().upper() == question.correct_answer.upper()
-                        score = q_score if is_correct else 0
-                        answer.score = score
-                        answer.feedback = get_localized_feedback(quiz_lang, score, question.correct_answer)
-                        answer.graded_at = datetime.now(timezone.utc)
-                        
-                    elif question.type == "open_ended":
-                        # AI grading for open-ended questions
-                        try:
-                            grading_result = await grade_open_ended_answer(
-                                question.text,
-                                user_answer,
-                                note_content,
-                                question.rubric,
-                                language=quiz_lang
-                            )
-                            
-                            # AI returns score out of 100, normalize it to q_score
-                            ai_score = grading_result.get("score", 0)
-                            normalized_score = (ai_score / 100.0) * q_score
-                            
-                            answer.score = normalized_score
-                            answer.feedback = grading_result.get("feedback", "No feedback available")
-                            answer.graded_at = datetime.now(timezone.utc)
-                            
-                        except Exception as e:
-                            logger.error(f"Error grading open-ended answer: {str(e)}")
-                            answer.score = 0
-                            answer.feedback = "Failed to grade answer due to technical issues."
-                            answer.graded_at = datetime.now(timezone.utc)
-                    
-                    total_score += answer.score or 0
-                    max_score = 100.0 # Fixed max score
-                    graded_count += 1
-                    
-                    # Update grading progress
-                    grading.graded_questions = graded_count
-                    await db.commit()
-                
-                # Update grading session as completed
-                grading.status = "completed"
-                grading.completed_at = datetime.now(timezone.utc)
-                await db.commit()
-                
-                logger.info(f"Completed grading for grading_id: {grading_id}, total_score: {total_score}/{max_score}")
-                
-            except Exception as e:
-                logger.error(f"Error grading quiz {quiz_id}: {str(e)}")
-                # Update grading session as failed
-                try:
-                    grading = await db.get(GradingSession, grading_id)
-                    if grading:
-                        grading.status = "failed"
-                        grading.error_message = str(e)
-                        await db.commit()
-                except:
-                    pass
-                raise
-            finally:
-                await task_engine.dispose()
-    
-    # Run the async function with proper loop management
     try:
-        return asyncio.run(_grade_quiz())
+        return asyncio.run(run_quiz_grading(grading_id, quiz_id, user_answers))
     except Exception as e:
         if "Retry" in str(e) or isinstance(e, celery.exceptions.Retry):
             raise
         logger.error(f"Fatal error in grade_quiz_task: {str(e)}")
         raise
+
+
+async def run_quiz_grading(grading_id: str, quiz_id: str, user_answers: Dict[str, str]) -> str:
+    """
+    Async implementation of quiz grading.
+    Shared between the Celery worker and any direct async callers.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from datetime import datetime, timezone
+
+    task_engine = get_task_engine()
+    async_session = async_sessionmaker(task_engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with async_session() as db:
+        try:
+            # Get grading session
+            grading = await db.get(GradingSession, grading_id)
+            if not grading:
+                raise ValueError(f"Grading session {grading_id} not found")
+
+            # Update status to grading so the frontend shows progress
+            grading.status = "grading"
+            await db.commit()
+
+            # Get quiz with questions
+            result = await db.execute(
+                select(Quiz)
+                .where(Quiz.id == quiz_id)
+                .options(selectinload(Quiz.questions).selectinload(Question.quiz))
+            )
+            quiz = result.scalar_one_or_none()
+            if not quiz:
+                raise ValueError(f"Quiz {quiz_id} not found")
+
+            # Get note content for AI context
+            from models.note import Note
+            note_result = await db.execute(select(Note).where(Note.id == quiz.note_id))
+            note = note_result.scalar_one_or_none()
+            if not note:
+                raise ValueError(f"Note {quiz.note_id} not found")
+
+            note_content = decrypt_text(note.cleaned_text_encrypted)
+
+            # Points per question (all questions sum to 100)
+            q_score = 100.0 / len(quiz.questions) if quiz.questions else 0
+            quiz_lang = quiz.parameters.get("language", "tr")
+
+            total_score = 0.0
+            graded_count = 0
+
+            for question in quiz.questions:
+                question_id_str = str(question.id)
+                user_answer = user_answers.get(question_id_str, "")
+
+                answer = Answer(
+                    user_id=grading.user_id,
+                    question_id=question.id,
+                    grading_id=grading.id,
+                    user_answer=user_answer,
+                    is_ai_graded=(question.type == "open_ended"),
+                )
+                db.add(answer)
+
+                # ── Empty answer: score 0, no AI call ──────────────────────
+                if not user_answer.strip():
+                    answer.score = 0
+                    if question.type == "multiple_choice":
+                        answer.feedback = get_localized_feedback(
+                            quiz_lang, 0, question.correct_answer, question.options
+                        )
+                    else:
+                        answer.feedback = (
+                            "Cevap girilmedi." if quiz_lang == "tr" else "No answer provided."
+                        )
+                    answer.graded_at = datetime.now(timezone.utc)
+
+                # ── Multiple-choice: instant comparison ─────────────────────
+                elif question.type == "multiple_choice":
+                    is_correct = (
+                        user_answer.strip().upper() == (question.correct_answer or "").upper()
+                    )
+                    score = q_score if is_correct else 0.0
+                    answer.score = score
+                    answer.feedback = get_localized_feedback(
+                        quiz_lang, score, question.correct_answer, question.options
+                    )
+                    answer.graded_at = datetime.now(timezone.utc)
+
+                # ── Open-ended: AI grading ──────────────────────────────────
+                elif question.type == "open_ended":
+                    try:
+                        grading_result = await grade_open_ended_answer(
+                            question.text,
+                            user_answer,
+                            note_content,
+                            question.rubric,
+                            language=quiz_lang,
+                        )
+                        ai_score = grading_result.get("score", 0)
+                        normalized_score = (ai_score / 100.0) * q_score
+                        answer.score = normalized_score
+                        answer.feedback = grading_result.get(
+                            "feedback", "No feedback available."
+                        )
+                        answer.graded_at = datetime.now(timezone.utc)
+                    except Exception as e:
+                        logger.error(f"Error grading open-ended answer for question {question.id}: {e}")
+                        answer.score = 0
+                        answer.feedback = (
+                            "Teknik sorun nedeniyle değerlendirilemedi."
+                            if quiz_lang == "tr"
+                            else "Failed to grade answer due to a technical issue."
+                        )
+                        answer.graded_at = datetime.now(timezone.utc)
+
+                total_score += answer.score or 0
+                graded_count += 1
+                grading.graded_questions = graded_count
+                # Commit after every question so the frontend can show progress
+                await db.commit()
+
+            # Mark grading as completed
+            grading.status = "completed"
+            grading.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+
+            logger.info(
+                f"Grading completed | grading_id={grading_id} | score={total_score}/100"
+            )
+            return grading_id
+
+        except Exception as e:
+            logger.error(f"Error during grading of quiz {quiz_id}: {e}")
+            try:
+                grading = await db.get(GradingSession, grading_id)
+                if grading:
+                    grading.status = "failed"
+                    grading.error_message = str(e)[:500]
+                    await db.commit()
+            except Exception:
+                logger.exception("Could not persist grading failure state")
+            raise
+        finally:
+            await task_engine.dispose()
