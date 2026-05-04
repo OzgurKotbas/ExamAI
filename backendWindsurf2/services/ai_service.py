@@ -428,55 +428,92 @@ def _extract_relevant_context(question_text: str, note_content: str, max_chars: 
 
 
 async def _call_gemini_with_retry(prompt: str, generation_config: Dict[str, Any], max_retries: int = 3, api_key: str | None = None):
-    """Call Gemini API with exponential backoff and model fallbacks."""
+    """Call Gemini API with an exhaustive list of models and multi-version (v1/v1beta) discovery."""
     effective_api_key = api_key or settings.GEMINI_API_KEY
     if not effective_api_key:
         raise ValueError("Gemini API key not configured")
         
-    genai.configure(api_key=effective_api_key)
-    
-    # List of models to try in order if 404 occurs
-    primary_model = settings.GEMINI_MODEL
-    fallback_models = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
-    
-    # Ensure primary_model is first and avoid duplicates
-    models_to_try = [primary_model]
-    for m in fallback_models:
-        if m not in models_to_try:
-            models_to_try.append(m)
-
+    api_versions = ["v1beta", "v1"]
     last_exception = None
-    
-    for model_name in models_to_try:
+
+    for version in api_versions:
         try:
-            logger.info(f"Attempting Gemini call with model: {model_name}")
-            model = genai.GenerativeModel(model_name)
+            logger.info(f"Configuring Gemini SDK with API version: {version}")
+            genai.configure(api_key=effective_api_key, transport="rest") # REST is more stable for version switching
             
-            retry_delay = 5
-            for attempt in range(max_retries + 1):
+            # 1. Exhaustive list of potential model names
+            models_to_try = [
+                settings.GEMINI_MODEL,
+                "gemini-1.5-flash",
+                "gemini-1.5-flash-latest",
+                "gemini-1.5-flash-001",
+                "gemini-1.5-flash-002",
+                "gemini-1.5-pro",
+                "gemini-1.5-pro-latest",
+                "gemini-1.5-pro-001",
+                "gemini-1.5-pro-002",
+                "gemini-pro",
+                "gemini-1.0-pro"
+            ]
+            
+            # Clean duplicates
+            models_to_try = [m for m in dict.fromkeys(models_to_try) if m]
+
+            # Try the hardcoded list for this version
+            for model_name in models_to_try:
                 try:
-                    return await model.generate_content_async(prompt, generation_config=generation_config)
-                except (exceptions.ResourceExhausted, exceptions.ServiceUnavailable) as e:
-                    if attempt < max_retries:
-                        wait_time = (retry_delay * (2 ** attempt)) + (random.random() * 2)
-                        logger.warning(f"Gemini rate limit/service error. Retrying in {wait_time:.2f}s...")
-                        await asyncio.sleep(wait_time)
-                    else:
-                        raise
-            # If successful, return immediately
-            break 
-            
-        except exceptions.NotFound as e:
-            logger.warning(f"Gemini model {model_name} not found (404). Trying next fallback...")
-            last_exception = e
-            continue # Try next model
+                    logger.info(f"[{version}] Attempting model: {model_name}")
+                    # In newer SDKs, we might need to specify the version in the model call if global config isn't enough
+                    model = genai.GenerativeModel(model_name)
+                    
+                    retry_delay = 5
+                    for attempt in range(max_retries + 1):
+                        try:
+                            # Note: The SDK doesn't always respect the global version for generate_content_async 
+                            # in older versions, but we'll try the standard way first.
+                            return await model.generate_content_async(prompt, generation_config=generation_config)
+                        except (exceptions.ResourceExhausted, exceptions.ServiceUnavailable) as e:
+                            if attempt < max_retries:
+                                wait_time = (retry_delay * (2 ** attempt)) + (random.random() * 2)
+                                logger.warning(f"[{version}] Rate limit/service error ({model_name}). Retrying...")
+                                await asyncio.sleep(wait_time)
+                            else:
+                                raise
+                    # Success!
+                    return 
+                    
+                except exceptions.NotFound:
+                    logger.warning(f"[{version}] Model {model_name} not found (404).")
+                    continue 
+                except Exception as e:
+                    logger.error(f"[{version}] Error with {model_name}: {str(e)}")
+                    last_exception = e
+                    if "401" in str(e) or "403" in str(e): raise # Auth errors are terminal
+                    continue
+
+            # 2. Dynamic Discovery for this version
+            try:
+                logger.info(f"[{version}] Attempting dynamic model discovery...")
+                # genai.list_models() usually respects the global version
+                available_models = genai.list_models()
+                for m in available_models:
+                    if 'generateContent' in m.supported_generation_methods:
+                        try:
+                            logger.info(f"[{version}] Trying discovered model: {m.name}")
+                            model = genai.GenerativeModel(m.name)
+                            return await model.generate_content_async(prompt, generation_config=generation_config)
+                        except Exception:
+                            continue
+            except Exception as e:
+                logger.warning(f"[{version}] Discovery failed: {e}")
+
         except Exception as e:
-            logger.error(f"Unexpected error with Gemini model {model_name}: {str(e)}")
+            logger.error(f"Failed to configure or use Gemini with version {version}: {e}")
             last_exception = e
-            raise # For non-404 errors, we probably want to fail fast or handle differently
-            
+
     if last_exception:
         raise last_exception
+    raise ValueError("All Gemini versions, models, and discovery attempts failed with 404/Not Found.")
 
 
 def _format_questions(questions: List[Dict[str, Any]], mc_count: int, oe_count: int) -> List[Dict[str, Any]]:
