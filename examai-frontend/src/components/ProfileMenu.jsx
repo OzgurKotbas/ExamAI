@@ -159,6 +159,7 @@ export default function ProfileMenu() {
 function AccountModal({ onClose, user, t }) {
   const [editName, setEditName] = useState(user?.full_name || '');
   const [editEmail, setEditEmail] = useState(user?.email || '');
+  const [editGeminiKey, setEditGeminiKey] = useState(user?.gemini_api_key || '');
   const [isEditing, setIsEditing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const { setUser } = useAuth();
@@ -171,7 +172,7 @@ function AccountModal({ onClose, user, t }) {
     
     setIsLoading(true);
     try {
-      const response = await authApi.updateProfile(editName, editEmail);
+      const response = await authApi.updateProfile(editName, editEmail, editGeminiKey);
       // Update user in context
       setUser(response.data);
       toast.success(t('success'));
@@ -232,6 +233,27 @@ function AccountModal({ onClose, user, t }) {
                   : 'bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-300'
               }`}
             />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              {t('geminiApiKey') || 'Gemini API Key'}
+            </label>
+            <input 
+              type="password" 
+              value={isEditing ? editGeminiKey : user?.gemini_api_key || ''} 
+              onChange={(e) => setEditGeminiKey(e.target.value)}
+              placeholder="AIzaSy..."
+              disabled={!isEditing || isLoading}
+              className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg ${
+                isEditing 
+                  ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500' 
+                  : 'bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-300'
+              }`}
+            />
+            <p className="text-[10px] text-gray-500 mt-1 italic">
+              {t('apiHint') || 'Optional. Your personal key will be used for AI tasks.'}
+            </p>
           </div>
         </div>
 

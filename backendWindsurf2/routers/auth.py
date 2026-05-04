@@ -179,12 +179,13 @@ async def reset_password_endpoint(body: PasswordResetVerify, db: AsyncSession = 
 async def update_profile(
     full_name: str = Form(...),
     email: str = Form(...),
+    gemini_api_key: str | None = Form(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Update current user's profile (name and email)."""
+    """Update current user's profile (name, email and API key)."""
     try:
-        updated_user = await update_user_profile(db, current_user, full_name, email)
+        updated_user = await update_user_profile(db, current_user, full_name, email, gemini_api_key)
         logger.info(f"Profile updated for user: {updated_user.email}")
         return updated_user
     except ValueError as e:

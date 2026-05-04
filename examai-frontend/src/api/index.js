@@ -60,10 +60,13 @@ export const authApi = {
     window.location.href = `${API_BASE_URL}/api/v1/auth/google`;
   },
 
-  updateProfile: (fullName, email) => {
+  updateProfile: (fullName, email, geminiApiKey) => {
     const form = new FormData();
     form.append('full_name', fullName);
     form.append('email', email);
+    if (geminiApiKey !== undefined) {
+      form.append('gemini_api_key', geminiApiKey || '');
+    }
     return api.put('/auth/profile', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });

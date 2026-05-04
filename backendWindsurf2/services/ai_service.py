@@ -112,49 +112,61 @@ async def _call_hf_api_with_token(model_id: str, token: str, prompt: str, max_ne
             raise
 
 
-async def _generate_with_fallback(prompt: str, max_tokens: int = 4000) -> str:
-    """Try Hugging Face first, then Gemini as fallback."""
+async def _generate_with_fallback(prompt: str, max_tokens: int = 4000, user_api_key: str | None = None) -> str:
+    """Try User's Gemini API key first if available, otherwise fallback to HF then system Gemini."""
     errors: list[AIProviderError] = []
 
+    # 1. PRIORITY: If user has their own API key, use it immediately
+    if user_api_key:
+        try:
+            logger.info("User-provided Gemini API key found. Using it as primary provider.")
+            generation_config = {
+                "temperature": 0.7,
+                "max_output_tokens": 8192,
+            }
+            response = await _call_gemini_with_retry(prompt, generation_config, api_key=user_api_key)
+            text = (response.text or "").strip()
+            if text:
+                return text
+            errors.append(AIProviderError("user_gemini", "empty response"))
+        except Exception as e:
+            logger.warning(f"User's Gemini API key failed: {str(e)}. Falling back to system providers.")
+            errors.append(AIProviderError("user_gemini", str(e)))
+
+    # 2. Hugging Face Models (Only if user key didn't return a result or doesn't exist)
     tokens = _get_hf_tokens()
     models = _get_hf_models()
 
-    # 1. Try Hugging Face First
     if tokens and models:
         for model in models:
             for token in tokens:
                 try:
-                    logger.info(f"Attempting HF generation (Primary) | model={model}")
+                    logger.info(f"Attempting HF generation | model={model}")
                     text = await _call_hf_api_with_token(model, token, prompt, max_tokens)
-                    if text and len(text.strip()) > 10: # Ensure we got a meaningful response
+                    if text and len(text.strip()) > 10:
                         return text
                 except Exception as e:
                     logger.warning(f"HF attempt failed | model={model} | error={str(e)}")
                     errors.append(AIProviderError(f"huggingface:{model}", str(e)))
                     continue
-    else:
-        logger.warning("HF tokens or models not configured. Skipping HF attempts.")
-        errors.append(AIProviderError("huggingface", "Not configured"))
-
-    # 2. Gemini Fallback
+    
+    # 3. Final Fallback: System Gemini API Key
     if settings.GEMINI_API_KEY:
         try:
-            logger.info("HF failed or not configured. Attempting Gemini fallback.")
+            logger.info("HF failed or not configured. Attempting system Gemini fallback.")
             generation_config = {
                 "temperature": 0.7,
                 "max_output_tokens": 8192,
             }
-            response = await _call_gemini_with_retry(prompt, generation_config)
+            # user_api_key was already tried, so we use settings.GEMINI_API_KEY explicitly
+            response = await _call_gemini_with_retry(prompt, generation_config, api_key=settings.GEMINI_API_KEY)
             text = (response.text or "").strip()
             if text:
                 return text
-            errors.append(AIProviderError("gemini", "empty response"))
+            errors.append(AIProviderError("system_gemini", "empty response"))
         except Exception as e:
-            logger.error("Gemini generation failed as well. error=%s", e)
-            errors.append(AIProviderError("gemini", str(e)))
-    else:
-        logger.warning("Gemini API key not configured.")
-        errors.append(AIProviderError("gemini", "GEMINI_API_KEY not configured"))
+            logger.error("Final system Gemini fallback failed. error=%s", e)
+            errors.append(AIProviderError("system_gemini", str(e)))
 
     error_text = "; ".join(f"{item.provider}: {item.error}" for item in errors[-5:])
     raise ValueError(f"All AI providers failed. {error_text}")
@@ -166,7 +178,8 @@ async def generate_questions_from_text(
     mc_ratio: float,
     difficulty: str,
     language: str = "tr",
-    weak_topics: List[str] | None = None
+    weak_topics: List[str] | None = None,
+    user_api_key: str | None = None
 ) -> List[Dict[str, Any]]:
     """Generate quiz questions from text using HF (with fallback) or Gemini.
     
@@ -177,6 +190,7 @@ async def generate_questions_from_text(
         difficulty: Difficulty level (easy, medium, hard).
         language: Language for questions and answers ('tr' or 'en').
         weak_topics: List of topics the user has struggled with previously.
+        user_api_key: User's personal Gemini API key.
     """
     try:
         # Calculate numbers
@@ -187,7 +201,7 @@ async def generate_questions_from_text(
         prompt = _build_quiz_prompt(text, mc_count, oe_count, difficulty, language, weak_topics)
         
         # Call AI with fallback
-        generated_text = await _generate_with_fallback(prompt)
+        generated_text = await _generate_with_fallback(prompt, user_api_key=user_api_key)
         _log_prompt("QUIZ_GENERATION", prompt, response=generated_text)
         
         # Parse JSON response
@@ -221,7 +235,8 @@ async def grade_open_ended_answer(
     user_answer: str,
     note_content: str,
     rubric: str | None = None,
-    language: str = "tr"
+    language: str = "tr",
+    user_api_key: str | None = None
 ) -> Dict[str, Any]:
     """Grade an open-ended answer using AI (Gemini first, then HF fallback)."""
     try:
@@ -229,7 +244,7 @@ async def grade_open_ended_answer(
         prompt = _build_grading_prompt(question_text, user_answer, note_content, rubric, language)
 
         # Use the same Gemini-first fallback chain as question generation
-        generated_text = await _generate_with_fallback(prompt, max_tokens=2000)
+        generated_text = await _generate_with_fallback(prompt, max_tokens=2000, user_api_key=user_api_key)
 
         # Log the interaction
         _log_prompt("GRADING", prompt, response=generated_text)
@@ -412,12 +427,13 @@ def _extract_relevant_context(question_text: str, note_content: str, max_chars: 
     return "\n\n".join(result_parts)
 
 
-async def _call_gemini_with_retry(prompt: str, generation_config: Dict[str, Any], max_retries: int = 3):
+async def _call_gemini_with_retry(prompt: str, generation_config: Dict[str, Any], max_retries: int = 3, api_key: str | None = None):
     """Call Gemini API with exponential backoff."""
-    if not settings.GEMINI_API_KEY:
+    effective_api_key = api_key or settings.GEMINI_API_KEY
+    if not effective_api_key:
         raise ValueError("Gemini API key not configured")
         
-    genai.configure(api_key=settings.GEMINI_API_KEY)
+    genai.configure(api_key=effective_api_key)
     model = genai.GenerativeModel(settings.GEMINI_MODEL)
     
     retry_delay = 5

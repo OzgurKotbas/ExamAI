@@ -27,6 +27,7 @@ class UserRead(UserBase):
     is_active: bool
     is_google_auth: bool
     is_oauth_user: bool
+    gemini_api_key: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

@@ -190,6 +190,8 @@ const translations = {
     loading: 'Yükleniyor...',
     success: 'Başarılı!',
     quiz: 'Sınav',
+    geminiApiKey: 'Gemini API Anahtarı',
+    apiHint: 'İsteğe bağlı. Kişisel anahtarınız sınav ve değerlendirme işlemlerinde kullanılacaktır.',
   },
   en: {
     // Login
@@ -379,6 +381,8 @@ const translations = {
     loading: 'Loading...',
     success: 'Success!',
     quiz: 'Quiz',
+    geminiApiKey: 'Gemini API Key',
+    apiHint: 'Optional. Your personal key will be used for quiz generation and grading.',
   },
 };
 
