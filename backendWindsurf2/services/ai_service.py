@@ -16,6 +16,7 @@ from google.api_core import exceptions
 from config import settings
 
 logger = logging.getLogger(__name__)
+logger.info("AI Service initialized with Gemini and HF support.")
 
 
 @dataclass
@@ -112,7 +113,7 @@ async def _call_hf_api_with_token(model_id: str, token: str, prompt: str, max_ne
             raise
 
 
-async def _generate_with_fallback(prompt: str, max_tokens: int = 4000, user_api_key: str | None = None) -> str:
+async def _generate_with_fallback(prompt: str, max_tokens: int = 4000, user_api_key: str | None = None, user_model: str | None = None) -> tuple[str, str, str | None]:
     """Try User's Gemini API key first if available, otherwise fallback to HF then system Gemini."""
     errors: list[AIProviderError] = []
 
@@ -124,16 +125,17 @@ async def _generate_with_fallback(prompt: str, max_tokens: int = 4000, user_api_
                 "temperature": 0.7,
                 "max_output_tokens": 8192,
             }
-            response = await _call_gemini_with_retry(prompt, generation_config, api_key=user_api_key)
+            # Use user_model if provided, otherwise the retry function will discover it
+            response, actual_model = await _call_gemini_with_retry(prompt, generation_config, api_key=user_api_key, model_override=user_model)
             text = (response.text or "").strip()
             if text:
-                return text
+                return text, "user_gemini", actual_model
             errors.append(AIProviderError("user_gemini", "empty response"))
         except Exception as e:
             logger.warning(f"User's Gemini API key failed: {str(e)}. Falling back to system providers.")
             errors.append(AIProviderError("user_gemini", str(e)))
 
-    # 2. Hugging Face Models (Only if user key didn't return a result or doesn't exist)
+    # 2. Hugging Face Models
     tokens = _get_hf_tokens()
     models = _get_hf_models()
 
@@ -144,7 +146,7 @@ async def _generate_with_fallback(prompt: str, max_tokens: int = 4000, user_api_
                     logger.info(f"Attempting HF generation | model={model}")
                     text = await _call_hf_api_with_token(model, token, prompt, max_tokens)
                     if text and len(text.strip()) > 10:
-                        return text
+                        return text, f"huggingface:{model}", None
                 except Exception as e:
                     logger.warning(f"HF attempt failed | model={model} | error={str(e)}")
                     errors.append(AIProviderError(f"huggingface:{model}", str(e)))
@@ -158,11 +160,10 @@ async def _generate_with_fallback(prompt: str, max_tokens: int = 4000, user_api_
                 "temperature": 0.7,
                 "max_output_tokens": 8192,
             }
-            # user_api_key was already tried, so we use settings.GEMINI_API_KEY explicitly
-            response = await _call_gemini_with_retry(prompt, generation_config, api_key=settings.GEMINI_API_KEY)
+            response, actual_model = await _call_gemini_with_retry(prompt, generation_config, api_key=settings.GEMINI_API_KEY)
             text = (response.text or "").strip()
             if text:
-                return text
+                return text, "system_gemini", actual_model
             errors.append(AIProviderError("system_gemini", "empty response"))
         except Exception as e:
             logger.error("Final system Gemini fallback failed. error=%s", e)
@@ -179,18 +180,11 @@ async def generate_questions_from_text(
     difficulty: str,
     language: str = "tr",
     weak_topics: List[str] | None = None,
-    user_api_key: str | None = None
-) -> List[Dict[str, Any]]:
+    user_api_key: str | None = None,
+    user_model: str | None = None
+) -> tuple[List[Dict[str, Any]], str | None]:
     """Generate quiz questions from text using HF (with fallback) or Gemini.
-    
-    Args:
-        text: Note content to generate questions from.
-        total_questions: Total number of questions to generate.
-        mc_ratio: Fraction of multiple-choice questions (0.0-1.0).
-        difficulty: Difficulty level (easy, medium, hard).
-        language: Language for questions and answers ('tr' or 'en').
-        weak_topics: List of topics the user has struggled with previously.
-        user_api_key: User's personal Gemini API key.
+    Returns (questions, actual_model_used).
     """
     try:
         # Calculate numbers
@@ -201,8 +195,8 @@ async def generate_questions_from_text(
         prompt = _build_quiz_prompt(text, mc_count, oe_count, difficulty, language, weak_topics)
         
         # Call AI with fallback
-        generated_text = await _generate_with_fallback(prompt, user_api_key=user_api_key)
-        _log_prompt("QUIZ_GENERATION", prompt, response=generated_text)
+        generated_text, provider, actual_model = await _generate_with_fallback(prompt, user_api_key=user_api_key, user_model=user_model)
+        _log_prompt("QUIZ_GENERATION", prompt, response=generated_text, provider=provider)
         
         # Parse JSON response
         try:
@@ -222,8 +216,8 @@ async def generate_questions_from_text(
         # Validate and format questions
         formatted_questions = _format_questions(questions, mc_count, oe_count)
         
-        logger.info(f"Generated {len(formatted_questions)} questions (lang={language}, weak_topics={weak_topics})")
-        return formatted_questions
+        logger.info(f"Generated {len(formatted_questions)} questions (lang={language}, provider={provider}, model={actual_model})")
+        return formatted_questions, actual_model
         
     except Exception as e:
         logger.error(f"Error generating questions: {str(e)}")
@@ -236,18 +230,21 @@ async def grade_open_ended_answer(
     note_content: str,
     rubric: str | None = None,
     language: str = "tr",
-    user_api_key: str | None = None
-) -> Dict[str, Any]:
-    """Grade an open-ended answer using AI (Gemini first, then HF fallback)."""
+    user_api_key: str | None = None,
+    user_model: str | None = None
+) -> tuple[Dict[str, Any], str | None]:
+    """Grade an open-ended answer using AI (Gemini first, then HF fallback).
+    Returns (grading_result, actual_model_used).
+    """
     try:
         # Build grading prompt
         prompt = _build_grading_prompt(question_text, user_answer, note_content, rubric, language)
 
         # Use the same Gemini-first fallback chain as question generation
-        generated_text = await _generate_with_fallback(prompt, max_tokens=2000, user_api_key=user_api_key)
+        generated_text, provider, actual_model = await _generate_with_fallback(prompt, max_tokens=2000, user_api_key=user_api_key, user_model=user_model)
 
         # Log the interaction
-        _log_prompt("GRADING", prompt, response=generated_text)
+        _log_prompt("GRADING", prompt, response=generated_text, provider=provider)
 
         # Parse JSON response – strip markdown fences if present
         try:
@@ -269,7 +266,7 @@ async def grade_open_ended_answer(
         if "feedback" not in grading_result:
             grading_result["feedback"] = "Degerlendirme tamamlandi." if language == "tr" else "Evaluation complete."
 
-        return grading_result
+        return grading_result, actual_model
 
     except Exception as e:
         logger.error(f"Error grading answer: {str(e)}")
@@ -427,93 +424,99 @@ def _extract_relevant_context(question_text: str, note_content: str, max_chars: 
     return "\n\n".join(result_parts)
 
 
-async def _call_gemini_with_retry(prompt: str, generation_config: Dict[str, Any], max_retries: int = 3, api_key: str | None = None):
-    """Call Gemini API with an exhaustive list of models and multi-version (v1/v1beta) discovery."""
+async def _call_gemini_with_retry(prompt: str, generation_config: Dict[str, Any], max_retries: int = 3, api_key: str | None = None, model_override: str | None = None):
+    """Call Gemini API with explicit model prefixes and robust 503/404 handling.
+    Returns (response, actual_model_name).
+    """
     effective_api_key = api_key or settings.GEMINI_API_KEY
     if not effective_api_key:
         raise ValueError("Gemini API key not configured")
         
-    api_versions = ["v1beta", "v1"]
     last_exception = None
+    # Prioritize v1beta for newer models in 2026 context
+    api_versions = ["v1beta", "v1"]
 
     for version in api_versions:
         try:
-            logger.info(f"Configuring Gemini SDK with API version: {version}")
-            genai.configure(api_key=effective_api_key, transport="rest") # REST is more stable for version switching
+            logger.info(f"Configuring Gemini SDK (Version: {version})")
+            # Removing transport="rest" as gRPC is generally more stable and faster
+            genai.configure(api_key=effective_api_key)
             
-            # 1. Exhaustive list of potential model names
-            models_to_try = [
-                settings.GEMINI_MODEL,
-                "gemini-1.5-flash",
-                "gemini-1.5-flash-latest",
-                "gemini-1.5-flash-001",
-                "gemini-1.5-flash-002",
-                "gemini-1.5-pro",
-                "gemini-1.5-pro-latest",
-                "gemini-1.5-pro-001",
-                "gemini-1.5-pro-002",
-                "gemini-pro",
-                "gemini-1.0-pro"
-            ]
+            # Use explicit 'models/' prefix to avoid 404s
+            models_to_try = []
+            if model_override:
+                # If user specified a model, try it first
+                models_to_try.append(model_override if model_override.startswith("models/") else f"models/{model_override}")
             
-            # Clean duplicates
-            models_to_try = [m for m in dict.fromkeys(models_to_try) if m]
+            # Default models as fallbacks
+            models_to_try.extend([
+                settings.GEMINI_MODEL if settings.GEMINI_MODEL.startswith("models/") else f"models/{settings.GEMINI_MODEL}",
+                "models/gemini-1.5-flash",
+                "models/gemini-2.0-flash", # Added for 2026 context
+                "models/gemini-1.5-pro",
+            ])
+            
+            # Clean and deduplicate
+            models_to_try = [m for m in dict.fromkeys(models_to_try) if m and m != "models/"]
 
-            # Try the hardcoded list for this version
+            # 1. Try Hardcoded Models
             for model_name in models_to_try:
                 try:
-                    logger.info(f"[{version}] Attempting model: {model_name}")
-                    # In newer SDKs, we might need to specify the version in the model call if global config isn't enough
+                    logger.info(f"[{version}] Attempting: {model_name}")
                     model = genai.GenerativeModel(model_name)
                     
                     retry_delay = 5
                     for attempt in range(max_retries + 1):
                         try:
-                            # Note: The SDK doesn't always respect the global version for generate_content_async 
-                            # in older versions, but we'll try the standard way first.
-                            return await model.generate_content_async(prompt, generation_config=generation_config)
-                        except (exceptions.ResourceExhausted, exceptions.ServiceUnavailable) as e:
+                            response = await model.generate_content_async(prompt, generation_config=generation_config)
+                            return response, model_name
+                        except (exceptions.ResourceExhausted, exceptions.ServiceUnavailable, exceptions.InternalServerError) as e:
+                            # 429 (ResourceExhausted), 503 (ServiceUnavailable), 500 (Internal)
                             if attempt < max_retries:
                                 wait_time = (retry_delay * (2 ** attempt)) + (random.random() * 2)
-                                logger.warning(f"[{version}] Rate limit/service error ({model_name}). Retrying...")
+                                logger.warning(f"[{version}] Retryable error ({type(e).__name__}) on {model_name}. Waiting {wait_time:.1f}s...")
                                 await asyncio.sleep(wait_time)
                             else:
                                 raise
-                    # Success!
-                    return 
-                    
                 except exceptions.NotFound:
-                    logger.warning(f"[{version}] Model {model_name} not found (404).")
+                    logger.warning(f"[{version}] Model {model_name} returned 404. Skipping...")
                     continue 
                 except Exception as e:
                     logger.error(f"[{version}] Error with {model_name}: {str(e)}")
                     last_exception = e
-                    if "401" in str(e) or "403" in str(e): raise # Auth errors are terminal
+                    if any(err in str(e) for err in ["401", "403", "API_KEY_INVALID"]): raise
                     continue
 
-            # 2. Dynamic Discovery for this version
+            # 2. Dynamic Discovery (The most reliable way in changing environments)
             try:
-                logger.info(f"[{version}] Attempting dynamic model discovery...")
-                # genai.list_models() usually respects the global version
+                logger.info(f"[{version}] Discovery mode active...")
                 available_models = genai.list_models()
                 for m in available_models:
                     if 'generateContent' in m.supported_generation_methods:
+                        # Skip experimental/thinking models that might be unstable
+                        if any(x in m.name.lower() for x in ["thinking", "experimental"]):
+                            continue
+                            
                         try:
                             logger.info(f"[{version}] Trying discovered model: {m.name}")
                             model = genai.GenerativeModel(m.name)
-                            return await model.generate_content_async(prompt, generation_config=generation_config)
-                        except Exception:
+                            response = await model.generate_content_async(prompt, generation_config=generation_config)
+                            return response, m.name
+                        except Exception as e:
+                            logger.debug(f"Discovered model {m.name} failed: {e}")
                             continue
             except Exception as e:
                 logger.warning(f"[{version}] Discovery failed: {e}")
 
         except Exception as e:
-            logger.error(f"Failed to configure or use Gemini with version {version}: {e}")
+            if any(err in str(e) for err in ["401", "403", "API_KEY_INVALID"]):
+                logger.error(f"Invalid API Key for Gemini: {e}")
+                raise
             last_exception = e
 
     if last_exception:
         raise last_exception
-    raise ValueError("All Gemini versions, models, and discovery attempts failed with 404/Not Found.")
+    raise ValueError("All Gemini connection attempts failed. Check logs for details.")
 
 
 def _format_questions(questions: List[Dict[str, Any]], mc_count: int, oe_count: int) -> List[Dict[str, Any]]:
@@ -531,7 +534,7 @@ def _format_questions(questions: List[Dict[str, Any]], mc_count: int, oe_count: 
     return formatted[:(mc_count + oe_count)]
 
 
-def _log_prompt(prompt_type: str, prompt: str, response: str = ""):
+def _log_prompt(prompt_type: str, prompt: str, response: str = "", provider: str = "unknown"):
     """
     Log the AI prompt and response for auditing and analysis.
     Stored in logs/prompts.log with a clear format.
@@ -549,7 +552,7 @@ def _log_prompt(prompt_type: str, prompt: str, response: str = ""):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(f"================================================================================\n")
-            f.write(f"[{timestamp}] TYPE: {prompt_type}\n")
+            f.write(f"[{timestamp}] TYPE: {prompt_type} | PROVIDER: {provider}\n")
             f.write(f"----------------------------------- PROMPT -------------------------------------\n")
             f.write(f"{prompt.strip()}\n")
             if response:

@@ -201,20 +201,28 @@ async def run_quiz_generation(quiz_id: str, note_text: str) -> str:
 
             logger.info(f"Quiz parameters - lang={language}, weak_topics={weak_topics}")
 
-            # Get user to fetch Gemini API Key
+            # Get user to fetch Gemini API Key and Model
             user_result = await db.execute(select(User).where(User.id == quiz.user_id))
             user = user_result.scalar_one_or_none()
             user_api_key = user.gemini_api_key if user else None
+            user_model = user.gemini_model if user else None
 
-            questions_data = await generate_questions_from_text(
+            questions_data, actual_model = await generate_questions_from_text(
                 text=note_text,
                 total_questions=quiz.total_questions,
                 mc_ratio=float(quiz.mc_ratio),
                 difficulty=quiz.difficulty,
                 language=language,
                 weak_topics=weak_topics,
-                user_api_key=user_api_key
+                user_api_key=user_api_key,
+                user_model=user_model
             )
+
+            # Auto-cache the working model name if not already set or if it changed
+            if user and actual_model and user.gemini_model != actual_model:
+                logger.info(f"Auto-caching working model '{actual_model}' for user {user.id}")
+                user.gemini_model = actual_model
+                await db.commit()
 
             if not questions_data:
                 logger.error(f"No questions generated for quiz {quiz_id}")
@@ -418,10 +426,11 @@ async def run_quiz_grading(grading_id: str, quiz_id: str, user_answers: Dict[str
             q_score = 100.0 / len(quiz.questions) if quiz.questions else 0
             quiz_lang = quiz.parameters.get("language", "tr")
 
-            # Get user to fetch Gemini API Key
+            # Get user to fetch Gemini API Key and Model
             user_result = await db.execute(select(User).where(User.id == grading.user_id))
             user = user_result.scalar_one_or_none()
             user_api_key = user.gemini_api_key if user else None
+            user_model = user.gemini_model if user else None
 
             total_score = 0.0
             graded_count = 0
@@ -467,14 +476,20 @@ async def run_quiz_grading(grading_id: str, quiz_id: str, user_answers: Dict[str
                 # ── Open-ended: AI grading ──────────────────────────────────
                 elif question.type == "open_ended":
                     try:
-                        grading_result = await grade_open_ended_answer(
+                        grading_result, actual_model = await grade_open_ended_answer(
                             question.text,
                             user_answer,
                             note_content,
                             question.rubric,
                             language=quiz_lang,
-                            user_api_key=user_api_key
+                            user_api_key=user_api_key,
+                            user_model=user_model
                         )
+                        # Auto-cache the working model name if not already set
+                        if user and actual_model and user.gemini_model != actual_model:
+                            logger.info(f"Auto-caching working model '{actual_model}' for user {user.id}")
+                            user.gemini_model = actual_model
+                            # We'll commit at the end of the loop or after each question
                         ai_score = grading_result.get("score", 0)
                         normalized_score = (ai_score / 100.0) * q_score
                         answer.score = normalized_score

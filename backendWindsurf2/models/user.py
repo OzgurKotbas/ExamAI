@@ -28,6 +28,7 @@ class User(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
     gemini_api_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    gemini_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Relationships
     notes: Mapped[list["Note"]] = relationship("Note", back_populates="user", cascade="all, delete-orphan")

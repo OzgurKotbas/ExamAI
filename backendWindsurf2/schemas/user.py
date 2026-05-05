@@ -11,10 +11,16 @@ from pydantic import BaseModel, EmailStr
 class UserBase(BaseModel):
     email: EmailStr
     full_name: str
+    gemini_model: str | None = None
 
 
 class UserCreate(UserBase):
     password: str
+
+
+class UserUpdate(BaseModel):
+    full_name: str | None = None
+    gemini_model: str | None = None
 
 
 class UserCreateGoogle(UserBase):

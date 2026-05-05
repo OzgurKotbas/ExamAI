@@ -180,12 +180,13 @@ async def update_profile(
     full_name: str = Form(...),
     email: str = Form(...),
     gemini_api_key: str | None = Form(None),
+    gemini_model: str | None = Form(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Update current user's profile (name, email and API key)."""
+    """Update current user's profile (name, email, API key and preferred model)."""
     try:
-        updated_user = await update_user_profile(db, current_user, full_name, email, gemini_api_key)
+        updated_user = await update_user_profile(db, current_user, full_name, email, gemini_api_key, gemini_model)
         logger.info(f"Profile updated for user: {updated_user.email}")
         return updated_user
     except ValueError as e:

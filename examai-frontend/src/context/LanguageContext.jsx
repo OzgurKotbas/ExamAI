@@ -192,6 +192,8 @@ const translations = {
     quiz: 'Sınav',
     geminiApiKey: 'Gemini API Anahtarı',
     apiHint: 'İsteğe bağlı. Kişisel anahtarınız sınav ve değerlendirme işlemlerinde kullanılacaktır.',
+    geminiModel: 'Gemini Model İsmi (Opsiyonel)',
+    modelHint: 'Boş bırakılırsa sistem çalışan modeli otomatik bulur ve kaydeder.',
   },
   en: {
     // Login
@@ -383,6 +385,8 @@ const translations = {
     quiz: 'Quiz',
     geminiApiKey: 'Gemini API Key',
     apiHint: 'Optional. Your personal key will be used for quiz generation and grading.',
+    geminiModel: 'Gemini Model Name (Optional)',
+    modelHint: 'If left blank, the system will automatically find and save the working model.',
   },
 };
 

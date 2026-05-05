@@ -386,8 +386,8 @@ async def reset_password(db: AsyncSession, email: str, code: str, new_password: 
 
 # ─── Profile Update Functions ───────────────────────────────────────────────
 
-async def update_user_profile(db: AsyncSession, user: User, full_name: str, email: str, gemini_api_key: str | None = None) -> User:
-    """Update user profile (name, email, and API key)."""
+async def update_user_profile(db: AsyncSession, user: User, full_name: str, email: str, gemini_api_key: str | None = None, gemini_model: str | None = None) -> User:
+    """Update user profile (name, email, API key, and preferred model)."""
     try:
         # Check if email is being changed and if it's already taken
         if email != user.email:
@@ -400,6 +400,7 @@ async def update_user_profile(db: AsyncSession, user: User, full_name: str, emai
         user.full_name = full_name
         user.email = email
         user.gemini_api_key = gemini_api_key
+        user.gemini_model = gemini_model
         await db.flush()
         await db.refresh(user)
         

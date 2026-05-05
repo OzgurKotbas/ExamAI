@@ -63,6 +63,16 @@ def setup_logging():
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
     
+    # File handler for AI errors and important events
+    import os
+    log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs')
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    
+    file_handler = logging.FileHandler(os.path.join(log_dir, 'ai_errors.log'))
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+    
     # Set specific logger levels
     logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
     logging.getLogger('sqlalchemy.pool').setLevel(logging.WARNING)
