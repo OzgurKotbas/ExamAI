@@ -1,0 +1,9 @@
+
+
+supabase: 
+DATABASE_URL="postgresql://postgres:QxVUrv4A4Icz1n4G@db.blvoxlslthuetmowmdhe.supabase.co:5432/postgres"
+
+REDIS_URL="rediss://default:gQAAAAAAAXxyAAIgcDExOTk1ZjFkMTBjOTc0MjQzYWMxZWM1NDE5ZDljNzQzMA@tough-polliwog-97394.upstash.io:6379"
+
+
+fly secrets set DATABASE_URL="postgresql://postgres:QxVUrv4A4Icz1n4G@db.blvoxlslthuetmowmdhe.supabase.co:5432/postgres" REDIS_URL="rediss://default:gQAAAAAAAXxyAAIgcDExOTk1ZjFkMTBjOTc0MjQzYWMxZWM1NDE5ZDljNzQzMA@tough-polliwog-97394.upstash.io:6379" SUPABASE_URL="https://blvoxlslthuetmowmdhe.supabase.co" SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJsdm94bHNsdGh1ZXRtb3dtZGhlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcyODQ2MzUsImV4cCI6MjA5Mjg2MDYzNX0.hnoIcjwuhqTDdZH2Fy3FW0ybF6lMXSXgQwqyrrm10TA"

@@ -18,7 +18,7 @@ import logging
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
@@ -27,6 +27,7 @@ from models.user import User
 from services.auth_service import get_current_user
 from services.extraction_service import ALLOWED_EXTENSIONS, extract_text
 from utils.security import encrypt_text
+from utils.i18n import translate
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ MAX_FILE_SIZE_BYTES: int = 20 * 1024 * 1024
 # ---------------------------------------------------------------------------
 # Yardımcı: uzantı doğrulama
 # ---------------------------------------------------------------------------
-def _validate_extension(filename: str | None) -> str:
+def _validate_extension(filename: str | None, lang: str = "tr") -> str:
     """
     Dosya adından uzantıyı çıkarır ve izin verilenler listesiyle karşılaştırır.
     Geçersiz uzantıda HTTP 400 fırlatır.
@@ -50,7 +51,7 @@ def _validate_extension(filename: str | None) -> str:
     if not filename:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Dosya adı bulunamadı. Lütfen geçerli bir dosya yükleyin.",
+            detail=translate("UNSUPPORTED_FORMAT", lang),
         )
 
     ext = Path(filename).suffix.lower()
@@ -58,10 +59,7 @@ def _validate_extension(filename: str | None) -> str:
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"Desteklenmeyen dosya formatı: '{ext}'. "
-                f"Kabul edilen formatlar: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
-            ),
+            detail=f"{translate('UNSUPPORTED_FORMAT', lang)}: '{ext}'",
         )
     return ext
 
@@ -97,7 +95,7 @@ def _map_ext_to_file_type(ext: str) -> str:
             "content": {
                 "application/json": {
                     "example": {
-                        "message": "Notes uploaded successfully",
+                        "message": "Notlar başarıyla yüklendi",
                         "notes": [
                             {"note_id": "uuid-1", "filename": "file1.pdf"},
                             {"note_id": "uuid-2", "filename": "file2.docx"},
@@ -117,6 +115,7 @@ async def upload_notes(
     files: List[UploadFile] = File(..., description="Yüklenecek not dosyaları (max 10)"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    lang: str = Header("tr", alias="X-Language")
 ):
     """
     Çoklu not dosyalarını yükle, metni çıkar ve kaydet.
@@ -129,7 +128,7 @@ async def upload_notes(
     if len(files) > 10:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="En fazla 10 dosya yükleyebilirsiniz.",
+            detail=translate("MAX_FILES_EXCEEDED", lang),
         )
 
     uploaded_notes = []
@@ -138,7 +137,7 @@ async def upload_notes(
     for file in files:
         try:
             # 1. Uzantı doğrulama
-            ext = _validate_extension(file.filename)
+            ext = _validate_extension(file.filename, lang=lang)
             file_type = _map_ext_to_file_type(ext)
 
             logger.info(
@@ -230,11 +229,11 @@ async def upload_notes(
     if not uploaded_notes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"message": "Hiçbir dosya yüklenemedi", "errors": errors},
+            detail={"message": translate("INTERNAL_SERVER_ERROR", lang), "errors": errors},
         )
 
     return {
-        "message": f"{len(uploaded_notes)} not başarıyla yüklendi",
+        "message": f"{len(uploaded_notes)} {translate('UPLOAD_SUCCESS', lang)}",
         "notes": uploaded_notes,
         "total": len(uploaded_notes),
         "errors": errors if errors else None,
@@ -252,6 +251,7 @@ async def upload_notes(
 async def list_notes(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    lang: str = Header("tr", alias="X-Language")
 ):
     """Giriş yapmış kullanıcının tüm notlarını döndürür."""
     from sqlalchemy import select
@@ -278,3 +278,44 @@ async def list_notes(
         ],
         "total": len(notes),
     }
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/v1/notes/{note_id}
+# ---------------------------------------------------------------------------
+@router.delete(
+    "/{note_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Not sil",
+    description="Belirtilen notu ve ona bağlı tüm sınavları siler.",
+)
+async def delete_note(
+    note_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    lang: str = Header("tr", alias="X-Language")
+):
+    """
+    Kullanıcının bir notunu siler. Cascade sayesinde bağlı sınavlar da silinir.
+    """
+    from sqlalchemy import select
+
+    # Notu bul ve sahiplik kontrolü yap
+    result = await db.execute(
+        select(Note).where(Note.id == note_id, Note.user_id == current_user.id)
+    )
+    note = result.scalar_one_or_none()
+
+    if not note:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=translate("RESOURCE_NOT_FOUND", lang),
+        )
+
+    # Sil
+    await db.delete(note)
+    await db.commit()
+
+    logger.info("Not silindi | note_id=%s | user_id=%s", note_id, current_user.id)
+
+    return {"message": translate("DELETE_SUCCESS", lang)}

@@ -18,7 +18,10 @@ import {
   BarChart2,
   TrendingUp,
   TrendingDown,
-  Globe
+  Globe,
+  X,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -28,6 +31,7 @@ import { notesApi, quizzesApi } from '../api';
 import FileUpload from '../components/FileUpload';
 import ProfileMenu from '../components/ProfileMenu';
 import QuizCategories from '../components/QuizCategories';
+import ConfirmModal from '../components/ConfirmModal';
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -49,6 +53,8 @@ export default function Dashboard() {
   });
   const [creatingQuiz, setCreatingQuiz] = useState(false);
   const [quizToDelete, setQuizToDelete] = useState(null);
+  const [noteToDelete, setNoteToDelete] = useState(null);
+  const [isResourcesExpanded, setIsResourcesExpanded] = useState(false);
   const [analyticsData, setAnalyticsData] = useState(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   // ref: generatingQuizIds'in güncel değerini interval callback'te okumak için
@@ -226,6 +232,33 @@ export default function Dashboard() {
   const handleDeleteQuiz = (quizId, e) => {
     if (e) e.stopPropagation();
     setQuizToDelete(quizId);
+  };
+
+  const handleDeleteNote = (noteId, e) => {
+    if (e) e.stopPropagation();
+    setNoteToDelete(noteId);
+  };
+
+  const confirmDeleteNote = async () => {
+    if (!noteToDelete) return;
+    
+    try {
+      await notesApi.delete(noteToDelete);
+      toast.success(t('deleteSuccess'));
+      setNotes(prev => prev.filter(n => n.id !== noteToDelete));
+      
+      // Kaynağa bağlı sınavlar da silinmiş olabilir, listeyi güncelle
+      const quizzesRes = await quizzesApi.list();
+      setQuizzes(quizzesRes.data);
+      
+      if (selectedNote?.id === noteToDelete) {
+        setSelectedNote(null);
+      }
+    } catch (error) {
+      toast.error(t('error'));
+    } finally {
+      setNoteToDelete(null);
+    }
   };
 
   const getStatusIcon = (status) => {
@@ -422,19 +455,26 @@ export default function Dashboard() {
               <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6 border border-gray-100 dark:border-gray-700">
                 <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-4">{t('statsUploaded')}</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {notes.map((note) => (
+                  {(isResourcesExpanded ? notes : notes.slice(0, 6)).map((note) => (
                     <div
                       key={note.id}
                       onClick={() => {
                         setSelectedNote(note);
                         setShowQuizModal(true);
                       }}
-                      className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                      className={`p-4 rounded-lg border-2 cursor-pointer transition-all relative group ${
                         selectedNote?.id === note.id
                           ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-900/30'
                           : 'border-gray-200 dark:border-gray-700 hover:border-indigo-300 hover:bg-gray-50 dark:hover:bg-gray-700'
                       }`}
                     >
+                      <button
+                        onClick={(e) => handleDeleteNote(note.id, e)}
+                        className="absolute -top-2 -right-2 w-7 h-7 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full flex items-center justify-center text-gray-400 hover:text-red-600 hover:border-red-600 shadow-sm opacity-0 group-hover:opacity-100 transition-all z-10"
+                        title={t('deleteResource')}
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
                       <div className="flex items-start gap-3">
                         <div className="w-10 h-10 bg-indigo-100 dark:bg-indigo-900/50 rounded-lg flex items-center justify-center flex-shrink-0">
                           <FileText className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
@@ -451,6 +491,28 @@ export default function Dashboard() {
                     </div>
                   ))}
                 </div>
+
+                {/* Show More/Less Toggle */}
+                {notes.length > 6 && (
+                  <div className="flex justify-center mt-6">
+                    <button
+                      onClick={() => setIsResourcesExpanded(!isResourcesExpanded)}
+                      className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-full transition-all border border-indigo-100 dark:border-indigo-800 shadow-sm hover:shadow-md"
+                    >
+                      {isResourcesExpanded ? (
+                        <>
+                          {currentLanguage === 'tr' ? 'Daha Az Göster' : 'Show Less'}
+                          <ChevronUp className="w-4 h-4 animate-bounce-slow" />
+                        </>
+                      ) : (
+                        <>
+                          {currentLanguage === 'tr' ? `Tümünü Gör (${notes.length})` : `Show All (${notes.length})`}
+                          <ChevronDown className="w-4 h-4 animate-bounce-slow" />
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -837,36 +899,29 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Custom Delete Confirmation Modal */}
-      {quizToDelete && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl max-w-sm w-full p-6 text-center transform transition-all scale-100">
-            <div className="w-16 h-16 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Trash2 className="w-8 h-8 text-red-600 dark:text-red-500" />
-            </div>
-            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
-              {t('deleteQuiz')}
-            </h3>
-            <p className="text-gray-500 dark:text-gray-400 mb-6">
-              {t('deleteConfirm')}
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => setQuizToDelete(null)}
-                className="flex-1 py-2.5 px-4 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 font-medium rounded-lg transition-colors"
-              >
-                {t('cancel')}
-              </button>
-              <button
-                onClick={confirmDeleteQuiz}
-                className="flex-1 py-2.5 px-4 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-colors shadow-sm"
-              >
-                {t('deleteQuiz')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Resource Delete Modal */}
+      <ConfirmModal
+        isOpen={!!noteToDelete}
+        onClose={() => setNoteToDelete(null)}
+        onConfirm={confirmDeleteNote}
+        title={t('deleteResource')}
+        message={t('deleteResourceConfirm')}
+        confirmText={t('delete')}
+        cancelText={t('cancel')}
+        variant="danger"
+      />
+
+      {/* Quiz Delete Modal */}
+      <ConfirmModal
+        isOpen={!!quizToDelete}
+        onClose={() => setQuizToDelete(null)}
+        onConfirm={confirmDeleteQuiz}
+        title={t('deleteQuiz')}
+        message={t('deleteConfirm')}
+        confirmText={t('delete')}
+        cancelText={t('cancel')}
+        variant="danger"
+      />
     </div>
   );
 }

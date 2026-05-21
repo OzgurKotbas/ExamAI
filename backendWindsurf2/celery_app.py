@@ -37,7 +37,7 @@ celery_app = Celery(
     "examai",
     broker=redis_url,
     backend=redis_url,
-    include=["services.celery_tasks"]
+    include=["services.celery_tasks"]  # refresh_gemini_models_task burada tanımlı
 )
 
 # Celery configuration
@@ -56,11 +56,21 @@ celery_app.conf.update(
     task_routes={
         "services.celery_tasks.generate_quiz_task": {"queue": "quiz_generation"},
         "services.celery_tasks.grade_quiz_task": {"queue": "default"},
+        "services.celery_tasks.refresh_gemini_models_task": {"queue": "default"},
     },
     task_default_queue="default",
     task_default_exchange="default",
     task_default_exchange_type="direct",
     task_default_routing_key="default",
+    # ── Celery Beat: Zamanlanmış Görevler ─────────────────────────────────────
+    beat_schedule={
+        "refresh-gemini-models-daily": {
+            "task": "services.celery_tasks.refresh_gemini_models_task",
+            "schedule": 86400,  # Her 24 saatte bir (saniye cinsinden)
+            # Belirli saat için: crontab(hour=3, minute=0)
+            # from celery.schedules import crontab
+        },
+    },
 )
 
 # Configure logging for Celery

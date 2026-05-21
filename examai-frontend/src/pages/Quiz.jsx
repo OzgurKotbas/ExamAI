@@ -388,9 +388,19 @@ export default function Quiz() {
             {questions.map((q, index) => {
               const result = results.grading_results.find(r => r.question_id === q.id);
               const questionScore = result?.score ?? 0;
-              const maxPerQuestion = questions.length > 0 ? (results.max_score / questions.length) : 100;
+              
+              // Her soru için max puanı hesapla (Backend'deki mantığa paralel)
+              const numQ = questions.length;
+              const baseQ = Math.floor(100 / numQ);
+              const isLast = index === numQ - 1;
+              const currentMax = isLast ? (100 - (baseQ * (numQ - 1))) : baseQ;
+
               const isZero = questionScore === 0;
-              const isFull = Math.round(questionScore) >= Math.round(maxPerQuestion);
+              // Test sınavında puan > 0 ise tam doğrudur. Klasik sınavda %80 ve üzeri yeşil görünsün.
+              const isFull = q.type === 'multiple_choice' 
+                ? questionScore > 0 
+                : questionScore >= (currentMax * 0.8);
+              
               const scoreColor = isZero ? 'bg-red-500' : isFull ? 'bg-green-500' : 'bg-orange-500';
               const cardBg = isZero
                 ? 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800'

@@ -18,6 +18,7 @@ from models.user import User
 from schemas.user import UserCreate
 from services.email_service import send_password_reset_email
 from utils.security import hash_password, verify_password, create_access_token, decode_access_token
+from utils.i18n import translate
 from config import settings
 from database import get_db
 
@@ -58,7 +59,7 @@ def _safe_picture_url(picture_url: str | None) -> str | None:
     return picture_url
 
 
-async def register_user(db: AsyncSession, user_data: UserCreate) -> User:
+async def register_user(db: AsyncSession, user_data: UserCreate, lang: str = "tr") -> User:
     """Register a new user with email & password."""
     try:
         # Check if user already exists
@@ -66,7 +67,7 @@ async def register_user(db: AsyncSession, user_data: UserCreate) -> User:
         existing_user = result.scalar_one_or_none()
         
         if existing_user:
-            raise ValueError("User with this email already exists")
+            raise ValueError(translate("EMAIL_EXISTS", lang))
         
         # Create new user
         hashed_password = hash_password(user_data.password)
@@ -78,7 +79,7 @@ async def register_user(db: AsyncSession, user_data: UserCreate) -> User:
         )
         
         db.add(user)
-        await db.flush()   # ID üret; commit get_db dependency'de yapılır
+        await db.commit()   # Commit immediately to ensure persistence
         await db.refresh(user)
         
         _log_auth_event("REGISTER", user.email, user.full_name)
@@ -89,23 +90,23 @@ async def register_user(db: AsyncSession, user_data: UserCreate) -> User:
         raise
     except Exception as e:
         logger.error(f"Error registering user: {str(e)}")
-        raise ValueError("Failed to register user")
+        raise ValueError(translate("REGISTRATION_FAILED", lang))
 
 
-async def authenticate_user(db: AsyncSession, email: str, password: str) -> Tuple[User, str]:
+async def authenticate_user(db: AsyncSession, email: str, password: str, lang: str = "tr") -> Tuple[User, str]:
     """Authenticate user with email & password and return user with token."""
     try:
         result = await db.execute(select(User).where(User.email == email))
         user = result.scalar_one_or_none()
         
         if not user:
-            raise ValueError("Invalid email or password")
+            raise ValueError(translate("INVALID_CREDENTIALS", lang))
         
         if not user.is_active:
-            raise ValueError("User account is inactive")
+            raise ValueError(translate("ACCOUNT_INACTIVE", lang))
         
         if not verify_password(password, user.hashed_password):
-            raise ValueError("Invalid email or password")
+            raise ValueError(translate("INVALID_CREDENTIALS", lang))
         
         token = create_access_token(str(user.id))
         _log_auth_event("LOGIN", email, user.full_name)
@@ -116,16 +117,17 @@ async def authenticate_user(db: AsyncSession, email: str, password: str) -> Tupl
         raise
     except Exception as e:
         logger.error(f"Error authenticating user: {str(e)}")
-        raise ValueError("Authentication failed")
+        raise ValueError(translate("AUTH_FAILED", lang))
 
 
 async def get_current_user(
     db: AsyncSession = Depends(get_db),
     authorization: str | None = Header(default=None),
+    lang: str = Header("tr", alias="X-Language")
 ) -> User:
     """Get current user from a Bearer token in the Authorization header."""
     if not authorization:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Authorization header")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=translate("MISSING_AUTH_HEADER", lang))
 
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token:
@@ -142,14 +144,14 @@ async def get_current_user(
         user = result.scalar_one_or_none()
 
         if not user or not user.is_active:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or inactive token")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=translate("INVALID_TOKEN", lang))
 
         return user
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting current user: {str(e)}")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Failed to authenticate token")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=translate("AUTH_FAILED", lang))
 
 
 def build_google_auth_url() -> str:
@@ -247,7 +249,7 @@ async def google_login_or_create(db: AsyncSession, code: str) -> Tuple[User, str
                 )
                 
                 db.add(user)
-                await db.flush()   # ID üret; commit get_db dependency'de yapılır
+                await db.commit()   # Commit immediately to ensure persistence
                 await db.refresh(user)
                 
                 logger.info(f"New user created via Google OAuth: {email}")
@@ -307,7 +309,7 @@ def delete_reset_code(email: str) -> bool:
         return False
 
 
-async def request_password_reset(db: AsyncSession, email: str) -> Tuple[bool, str]:
+async def request_password_reset(db: AsyncSession, email: str, lang: str = "tr") -> Tuple[bool, str]:
     """Request password reset - generates code and sends email."""
     try:
         # Check if user exists
@@ -317,12 +319,12 @@ async def request_password_reset(db: AsyncSession, email: str) -> Tuple[bool, st
         if not user:
             # Don't reveal if user exists or not for security
             logger.info(f"Password reset requested for non-existent email: {email}")
-            return True, "If the email exists, a reset code has been sent"
+            return True, translate("RESET_CODE_FALLBACK", lang)
         
-        # Don't allow password reset for OAuth-only users
+        # Allow password reset for OAuth users so they can set a local password
         if user.is_oauth_user and not user.hashed_password:
-            logger.warning(f"Password reset attempted for OAuth-only user: {email}")
-            return True, "If the email exists, a reset code has been sent"
+            logger.info(f"OAuth user setting password for the first time: {email}")
+            # Continue to generate and send code below
         
         # Generate and store reset code
         reset_code = generate_reset_code()
@@ -343,50 +345,50 @@ async def request_password_reset(db: AsyncSession, email: str) -> Tuple[bool, st
             )
         
         logger.info(f"Password reset code sent to: {email}")
-        return True, "Reset code sent to your email"
+        return True, translate("RESET_CODE_SENT", lang)
         
     except ValueError:
         raise
     except Exception as e:
         logger.error(f"Error requesting password reset: {str(e)}")
-        raise ValueError("Failed to process password reset request")
+        raise ValueError(translate("INTERNAL_SERVER_ERROR", lang))
 
 
-async def reset_password(db: AsyncSession, email: str, code: str, new_password: str) -> Tuple[bool, str]:
+async def reset_password(db: AsyncSession, email: str, code: str, new_password: str, lang: str = "tr") -> Tuple[bool, str]:
     """Reset password with verification code."""
     try:
         # Verify the reset code
         if not verify_reset_code(email, code):
-            raise ValueError("Invalid or expired reset code")
+            raise ValueError(translate("INVALID_RESET_CODE", lang))
         
         # Get user
         result = await db.execute(select(User).where(User.email == email))
         user = result.scalar_one_or_none()
         
         if not user:
-            raise ValueError("User not found")
+            raise ValueError(translate("USER_NOT_FOUND", lang))
         
         # Update password
         user.hashed_password = hash_password(new_password)
-        await db.flush()
+        await db.commit()
         await db.refresh(user)
         
         # Delete the used reset code
         delete_reset_code(email)
         
         logger.info(f"Password reset successful for: {email}")
-        return True, "Password reset successfully"
+        return True, translate("PASSWORD_RESET_SUCCESS", lang)
         
     except ValueError:
         raise
     except Exception as e:
         logger.error(f"Error resetting password: {str(e)}")
-        raise ValueError("Failed to reset password")
+        raise ValueError(translate("PASSWORD_RESET_FAILED", lang))
 
 
 # ─── Profile Update Functions ───────────────────────────────────────────────
 
-async def update_user_profile(db: AsyncSession, user: User, full_name: str, email: str, gemini_api_key: str | None = None, gemini_model: str | None = None) -> User:
+async def update_user_profile(db: AsyncSession, user: User, full_name: str, email: str, gemini_api_key: str | None = None, gemini_model: str | None = None, lang: str = "tr") -> User:
     """Update user profile (name, email, API key, and preferred model)."""
     try:
         # Check if email is being changed and if it's already taken
@@ -394,14 +396,14 @@ async def update_user_profile(db: AsyncSession, user: User, full_name: str, emai
             result = await db.execute(select(User).where(User.email == email))
             existing_user = result.scalar_one_or_none()
             if existing_user:
-                raise ValueError("Email address is already in use")
+                raise ValueError(translate("EMAIL_IN_USE", lang))
         
         # Update user
         user.full_name = full_name
         user.email = email
         user.gemini_api_key = gemini_api_key
         user.gemini_model = gemini_model
-        await db.flush()
+        await db.commit()
         await db.refresh(user)
         
         logger.info(f"User profile updated: {user.email}")
@@ -411,19 +413,19 @@ async def update_user_profile(db: AsyncSession, user: User, full_name: str, emai
         raise
     except Exception as e:
         logger.error(f"Error updating user profile: {str(e)}")
-        raise ValueError("Failed to update profile")
+        raise ValueError(translate("PROFILE_UPDATE_FAILED", lang))
 
 
-async def change_user_password(db: AsyncSession, user: User, current_password: str, new_password: str) -> bool:
+async def change_user_password(db: AsyncSession, user: User, current_password: str, new_password: str, lang: str = "tr") -> bool:
     """Change password for logged-in user."""
     try:
         # Verify current password
         if not user.hashed_password or not verify_password(current_password, user.hashed_password):
-            raise ValueError("Current password is incorrect")
+            raise ValueError(translate("CURRENT_PASSWORD_INCORRECT", lang))
         
         # Update password
         user.hashed_password = hash_password(new_password)
-        await db.flush()
+        await db.commit()
         await db.refresh(user)
         
         logger.info(f"Password changed for user: {user.email}")
@@ -433,4 +435,4 @@ async def change_user_password(db: AsyncSession, user: User, current_password: s
         raise
     except Exception as e:
         logger.error(f"Error changing password: {str(e)}")
-        raise ValueError("Failed to change password")
+        raise ValueError(translate("PASSWORD_CHANGE_FAILED", lang))

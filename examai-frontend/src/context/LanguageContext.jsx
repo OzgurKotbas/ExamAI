@@ -148,6 +148,9 @@ const translations = {
     deleteQuiz: 'Sınavı Sil',
     deleteConfirm: 'Bu sınavı silmek istediğinize emin misiniz? (Tüm değerlendirme raporu kaybolacaktır)',
     deleteSuccess: 'Sınav başarıyla silindi',
+    deleteResource: 'Kaynağı Sil',
+    deleteResourceConfirm: 'Bu kaynağı silmek istediğinize emin misiniz? (Bu kaynağa bağlı tüm sınavlar da silinecektir)',
+
     
     // Quiz Language Selection
     quizLanguage: 'Sınav Dili',
@@ -341,6 +344,9 @@ const translations = {
     deleteQuiz: 'Delete Quiz',
     deleteConfirm: 'Are you sure you want to delete this quiz? (All evaluation reports will be lost)',
     deleteSuccess: 'Quiz deleted successfully',
+    deleteResource: 'Delete Resource',
+    deleteResourceConfirm: 'Are you sure you want to delete this resource? (All quizzes linked to this resource will also be deleted)',
+
     
     // Quiz Language Selection
     quizLanguage: 'Exam Language',

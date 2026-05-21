@@ -2,7 +2,7 @@ import asyncio
 import logging
 import uuid as _uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +22,7 @@ from schemas.quiz import (
 from services.auth_service import get_current_user
 from services.cache_service import _build_cache_key, get_cached_quiz
 from utils.security import decrypt_text
+from utils.i18n import translate
 from utils.localization import get_localized_feedback
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ async def create_quiz(
     body: QuizCreateRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    lang: str = Header("tr", alias="X-Language")
 ):
     """
     Create a new quiz from a note.
@@ -45,14 +47,14 @@ async def create_quiz(
         note = await db.get(Note, body.note_id)
         if not note or note.user_id != current_user.id:
             logger.warning(f"Quiz creation failed: Note {body.note_id} not found or not owned by user {current_user.id}")
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Note not found.")
+            raise HTTPException(status.HTTP_404_NOT_FOUND, translate("NOTE_NOT_FOUND", lang))
 
         # Validate note content
         if not note.cleaned_text_encrypted:
             logger.warning(f"Quiz creation failed: Note {body.note_id} has no content")
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
-                "Cannot create quiz from note without content. Please ensure the note has been processed."
+                translate("NOTE_NO_CONTENT", lang)
             )
 
         # Decrypt and validate note text
@@ -62,13 +64,13 @@ async def create_quiz(
                 logger.warning(f"Quiz creation failed: Note {body.note_id} has insufficient content")
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST,
-                    "Note content is too short to generate meaningful questions. Please add more content to your note."
+                    translate("NOTE_TOO_SHORT", lang)
                 )
         except Exception as e:
             logger.error(f"Failed to decrypt note {body.note_id}: {str(e)}")
             raise HTTPException(
                 status.HTTP_500_INTERNAL_SERVER_ERROR,
-                "Failed to process note content. Please try again."
+                translate("INTERNAL_SERVER_ERROR", lang)
             )
 
         uid = str(current_user.id)
@@ -125,7 +127,7 @@ async def create_quiz(
                 return QuizStatusResponse(
                     quiz_id=cached_quiz_id,
                     status="ready",
-                    message="Quiz fetched from cache.",
+                    message="Sınav hafızadan (cache) getirildi.",
                 )
             logger.warning(
                 "Ignoring stale quiz cache | quiz_id=%s | status=%s | questions=%s",
@@ -181,14 +183,14 @@ async def create_quiz(
                 await db.commit()
                 raise HTTPException(
                     status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    "Failed to start quiz generation. Please try again."
+                    "Sınav oluşturma başlatılamadı. Lütfen tekrar deneyin."
                 )
             else:
                 logger.info(f"Scheduled local quiz generation fallback for quiz {quiz.id}")
                 return QuizStatusResponse(
                     quiz_id=quiz.id,
                     status="pending",
-                    message="Quiz is being generated. Poll /quizzes/{quiz_id}/status for updates.",
+                    message="Sınav oluşturuluyor. Lütfen bekleyin...",
                 )
         return QuizStatusResponse(
             quiz_id=quiz.id,
@@ -202,7 +204,7 @@ async def create_quiz(
         logger.error(f"Unexpected error creating quiz: {str(e)}")
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "Failed to create quiz. Please try again."
+            translate("QUIZ_GEN_FAILED", lang)
         )
 
 
@@ -211,18 +213,19 @@ async def quiz_status(
     quiz_id: _uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    lang: str = Header("tr", alias="X-Language")
 ):
     try:
         quiz = await db.get(Quiz, quiz_id)
         if not quiz or quiz.user_id != current_user.id:
             logger.warning(f"Quiz status check failed: Quiz {quiz_id} not found or not owned by user {current_user.id}")
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Quiz not found.")
+            raise HTTPException(status.HTTP_404_NOT_FOUND, translate("QUIZ_NOT_FOUND", lang))
         
         msg = {
-            "pending": "Quiz is queued for generation.",
-            "generating": "Quiz is currently being generated…",
-            "ready": "Quiz is ready!",
-            "failed": "Quiz generation failed. Please try again.",
+            "pending": "Sınav oluşturma kuyruğunda bekliyor.",
+            "generating": "Sınav şu anda oluşturuluyor...",
+            "ready": "Sınav hazır!",
+            "failed": "Sınav oluşturulamadı. Lütfen tekrar deneyin.",
         }.get(quiz.status, quiz.status)
 
         # Find latest completed grading session
@@ -248,7 +251,7 @@ async def quiz_status(
         logger.error(f"Error checking quiz status for {quiz_id}: {str(e)}")
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "Failed to check quiz status."
+            translate("INTERNAL_SERVER_ERROR", lang)
         )
 
 
@@ -257,6 +260,7 @@ async def get_questions(
     quiz_id: _uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    lang: str = Header("tr", alias="X-Language")
 ):
     """
     Returns questions for a ready quiz.
@@ -267,11 +271,11 @@ async def get_questions(
         quiz = await db.get(Quiz, quiz_id)
         if not quiz or quiz.user_id != current_user.id:
             logger.warning(f"Questions retrieval failed: Quiz {quiz_id} not found or not owned by user {current_user.id}")
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Quiz not found.")
+            raise HTTPException(status.HTTP_404_NOT_FOUND, translate("QUIZ_NOT_FOUND", lang))
         
         if quiz.status != "ready":
             logger.warning(f"Questions retrieval failed: Quiz {quiz_id} not ready (status: {quiz.status})")
-            raise HTTPException(status.HTTP_409_CONFLICT, f"Quiz is not ready yet (status: {quiz.status}).")
+            raise HTTPException(status.HTTP_409_CONFLICT, f"{translate('QUIZ_NOT_READY', lang)} (durum: {quiz.status}).")
         
         result = await db.execute(
             select(Question).where(Question.quiz_id == quiz_id).order_by(Question.order_index)
@@ -296,7 +300,7 @@ async def get_questions(
         logger.error(f"Error retrieving questions for quiz {quiz_id}: {str(e)}")
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "Failed to retrieve quiz questions."
+            translate("INTERNAL_SERVER_ERROR", lang)
         )
 
 
@@ -304,6 +308,7 @@ async def get_questions(
 async def list_quizzes(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    lang: str = Header("tr", alias="X-Language")
 ):
     try:
         # Get quizzes
@@ -357,7 +362,7 @@ async def list_quizzes(
         logger.error(f"Error listing quizzes for user {current_user.id}: {str(e)}")
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "Failed to retrieve quizzes."
+            translate("INTERNAL_SERVER_ERROR", lang)
         )
 
 
@@ -367,6 +372,7 @@ async def submit_quiz_for_grading(
     body: QuizSubmission,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    lang: str = Header("tr", alias="X-Language")
 ):
     """
     Submit quiz answers for grading.
@@ -380,13 +386,13 @@ async def submit_quiz_for_grading(
         quiz = await db.get(Quiz, quiz_id)
         if not quiz or quiz.user_id != current_user.id:
             logger.warning(f"Quiz submission failed: Quiz {quiz_id} not found or not owned by user {current_user.id}")
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Quiz not found.")
+            raise HTTPException(status.HTTP_404_NOT_FOUND, translate("QUIZ_NOT_FOUND", lang))
         
         if quiz.status != "ready":
             logger.warning(f"Quiz submission failed: Quiz {quiz_id} not ready (status: {quiz.status})")
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
-                f"Quiz is not ready for submission (status: {quiz.status})."
+                f"{translate('QUIZ_NOT_READY', lang)} (durum: {quiz.status})."
             )
         
         # Fetch all questions
@@ -421,14 +427,18 @@ async def submit_quiz_for_grading(
             
             # Instant grading for multiple-choice questions
             graded_count = 0
-            for question in questions:
+            num_questions = len(questions)
+            base_q_score = 100 // num_questions
+            last_q_score = 100 - (base_q_score * (num_questions - 1))
+
+            for i, question in enumerate(questions):
                 user_answer = user_answers.get(str(question.id), "")
                 # Clean answer for comparison (A, B, C, D)
                 user_ans_clean = user_answer.strip().upper()
                 correct_ans_clean = question.correct_answer.strip().upper() if question.correct_answer else ""
 
-                q_score = 100.0 / len(questions)
-                score = q_score if user_ans_clean == correct_ans_clean else 0
+                current_max_score = last_q_score if i == num_questions - 1 else base_q_score
+                score = float(current_max_score) if user_ans_clean == correct_ans_clean else 0.0
                 
                 # Localized feedback
                 feedback = get_localized_feedback(quiz_lang, score, question.correct_answer, question.options)
@@ -456,7 +466,7 @@ async def submit_quiz_for_grading(
                 grading_id=grading.id,
                 quiz_id=quiz_id,
                 status="completed",
-                message="Quiz graded instantly!"
+                message="Sınav anında değerlendirildi!"
             )
         else:
             # Enqueue Celery task for AI grading
@@ -471,13 +481,13 @@ async def submit_quiz_for_grading(
                     grading_id=grading.id,
                     quiz_id=quiz_id,
                     status="pending",
-                    message="Quiz is being graded by AI. Please wait."
+                    message="Sınav yapay zeka tarafından değerlendiriliyor. Lütfen bekleyin."
                 )
             except Exception as e:
                 logger.error(f"Failed to enqueue grading task: {str(e)}")
                 grading.status = "failed"
                 await db.commit()
-                raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Failed to start grading.")
+                raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Değerlendirme başlatılamadı.")
 
         
     except HTTPException:
@@ -486,7 +496,7 @@ async def submit_quiz_for_grading(
         logger.error(f"Unexpected error submitting quiz {quiz_id}: {str(e)}")
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "Failed to submit quiz for grading."
+            translate("INTERNAL_SERVER_ERROR", lang)
         )
 
 
@@ -496,6 +506,7 @@ async def get_grading_results(
     grading_id: _uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    lang: str = Header("tr", alias="X-Language")
 ):
     """
     Get grading results for a submitted quiz.
@@ -506,13 +517,13 @@ async def get_grading_results(
         grading = await db.get(GradingSession, grading_id)
         if not grading or grading.user_id != current_user.id or grading.quiz_id != quiz_id:
             logger.warning(f"Grading results failed: Grading {grading_id} not found or not owned by user {current_user.id}")
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Grading session not found.")
+            raise HTTPException(status.HTTP_404_NOT_FOUND, translate("GRADING_NOT_FOUND", lang))
         
         if grading.status != "completed":
             logger.warning(f"Grading results failed: Grading {grading_id} not completed (status: {grading.status})")
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
-                f"Grading is not completed yet (status: {grading.status})."
+                f"{translate('GRADING_NOT_READY', lang)} (durum: {grading.status})."
             )
         
         # Get all answers for this quiz
@@ -528,7 +539,7 @@ async def get_grading_results(
             logger.warning(f"No answers found for quiz {quiz_id}")
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND,
-                "No answers found for this quiz."
+                translate("NO_ANSWERS_FOUND", lang)
             )
         
         # Calculate total score (already out of 100 total points)
@@ -543,7 +554,7 @@ async def get_grading_results(
                 "question_id": answer.question_id,
                 "score": answer.score or 0,
                 "user_answer": answer.user_answer,
-                "feedback": answer.feedback or "No feedback available",
+                "feedback": answer.feedback or "Geri bildirim mevcut değil",
                 "key_points_covered": [],
                 "missing_points": [],
                 "suggestions": []
@@ -566,7 +577,7 @@ async def get_grading_results(
         logger.error(f"Error retrieving grading results for quiz {quiz_id}: {str(e)}")
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "Failed to retrieve grading results."
+            translate("INTERNAL_SERVER_ERROR", lang)
         )
 
 
@@ -576,6 +587,7 @@ async def get_grading_status(
     grading_id: _uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    lang: str = Header("tr", alias="X-Language")
 ):
     """
     Get the status of an ongoing grading process.
@@ -584,13 +596,13 @@ async def get_grading_status(
         grading = await db.get(GradingSession, grading_id)
         if not grading or grading.user_id != current_user.id or grading.quiz_id != quiz_id:
             logger.warning(f"Grading status check failed: Grading {grading_id} not found or not owned by user {current_user.id}")
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Grading session not found.")
+            raise HTTPException(status.HTTP_404_NOT_FOUND, translate("GRADING_NOT_FOUND", lang))
         
         msg = {
-            "pending": "Quiz is queued for grading.",
-            "grading": f"Quiz is currently being graded… ({grading.graded_questions}/{grading.total_questions} questions processed)",
-            "completed": "Quiz grading completed!",
-            "failed": f"Quiz grading failed. {grading.error_message or 'Please try again.'}",
+            "pending": "Sınav değerlendirme kuyruğunda bekliyor.",
+            "grading": f"Sınav şu anda değerlendiriliyor... ({grading.graded_questions}/{grading.total_questions} soru işlendi)",
+            "completed": "Sınav değerlendirmesi tamamlandı!",
+            "failed": f"Değerlendirme başarısız oldu. {grading.error_message or 'Lütfen tekrar deneyin.'}",
         }.get(grading.status, grading.status)
         
         return GradingStatusResponse(
@@ -606,7 +618,7 @@ async def get_grading_status(
         logger.error(f"Error checking grading status for {grading_id}: {str(e)}")
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "Failed to check grading status."
+            translate("INTERNAL_SERVER_ERROR", lang)
         )
 
 
@@ -615,6 +627,7 @@ async def delete_quiz(
     quiz_id: _uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    lang: str = Header("tr", alias="X-Language")
 ):
     """
     Delete a quiz and all its associated questions, answers, and grading sessions.
@@ -623,7 +636,7 @@ async def delete_quiz(
         quiz = await db.get(Quiz, quiz_id)
         if not quiz or quiz.user_id != current_user.id:
             logger.warning(f"Delete quiz failed: Quiz {quiz_id} not found or not owned by user {current_user.id}")
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Quiz not found.")
+            raise HTTPException(status.HTTP_404_NOT_FOUND, translate("QUIZ_NOT_FOUND", lang))
 
         # SQLAlchemy cascade should handle deleting associated Questions, Answers, GradingSessions
         await db.delete(quiz)
@@ -638,7 +651,7 @@ async def delete_quiz(
         logger.error(f"Error deleting quiz {quiz_id}: {str(e)}")
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "Failed to delete quiz."
+            translate("INTERNAL_SERVER_ERROR", lang)
         )
 
 
@@ -646,6 +659,7 @@ async def delete_quiz(
 async def get_quiz_analytics(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    lang: str = Header("tr", alias="X-Language")
 ):
     """
     Get analytics for the authenticated user.
@@ -765,5 +779,5 @@ async def get_quiz_analytics(
         logger.error(f"Error computing analytics for user {current_user.id}: {str(e)}")
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "Failed to compute analytics."
+            translate("INTERNAL_SERVER_ERROR", lang)
         )

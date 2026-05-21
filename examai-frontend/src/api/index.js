@@ -9,13 +9,18 @@ const api = axios.create({
   },
 });
 
-// Request interceptor: attach JWT
+// Request interceptor: attach JWT and Language
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('access_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+    
+    // Dil bilgisini ekle
+    const lang = localStorage.getItem('language') || 'tr';
+    config.headers['X-Language'] = lang;
+    
     return config;
   },
   (error) => Promise.reject(error)
@@ -27,7 +32,10 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('access_token');
-      window.location.href = '/login';
+      // Giriş sayfasındaysak veya giriş yapmaya çalışıyorsak yönlendirme yapma
+      if (!window.location.pathname.includes('/login') && !error.config.url.includes('/auth/login')) {
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }
@@ -83,7 +91,19 @@ export const authApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
+
+  getGeminiModels: () => api.get('/auth/gemini-models'),
+
+  validateGeminiKey: (geminiApiKey, geminiModel) => {
+    const form = new FormData();
+    form.append('gemini_api_key', geminiApiKey);
+    form.append('gemini_model', geminiModel);
+    return api.post('/auth/validate-gemini-key', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
 };
+
 
 // ─── Notes ────────────────────────────────────────────────────────────────────
 
@@ -99,6 +119,7 @@ export const notesApi = {
   },
 
   list: () => api.get('/notes'),
+  delete: (noteId) => api.delete(`/notes/${noteId}`),
 };
 
 // ─── Quizzes ──────────────────────────────────────────────────────────────────

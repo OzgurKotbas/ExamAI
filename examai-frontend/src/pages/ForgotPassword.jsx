@@ -40,12 +40,10 @@ export default function ForgotPassword() {
   const {
     register: registerReset,
     handleSubmit: handleSubmitReset,
+    setValue: setValueReset,
     formState: { errors: errorsReset },
   } = useForm({
     resolver: zodResolver(resetSchema(t)),
-    defaultValues: {
-      email: email,
-    },
   });
 
   const onSubmitEmail = async (data) => {
@@ -53,6 +51,7 @@ export default function ForgotPassword() {
     try {
       await authApi.forgotPassword(data.email);
       setEmail(data.email);
+      setValueReset('email', data.email);
       toast.success(t('resetCodeSent'));
       setStep(2);
     } catch (error) {
@@ -144,7 +143,7 @@ export default function ForgotPassword() {
       </div>
 
       <form onSubmit={handleSubmitReset(onSubmitReset)} className="space-y-4">
-        <input type="hidden" {...registerReset('email')} value={email} />
+        <input type="hidden" {...registerReset('email')} />
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">

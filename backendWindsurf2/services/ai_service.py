@@ -16,7 +16,80 @@ from google.api_core import exceptions
 from config import settings
 
 logger = logging.getLogger(__name__)
+from utils.i18n import translate
 logger.info("AI Service initialized with Gemini and HF support.")
+
+
+# ── Supported Gemini models list (used for dropdown in frontend) ───────────────
+SUPPORTED_GEMINI_MODELS = [
+    # Gemini 3.x — En Yeni Nesil (Google AI Studio üzerinden erişim)
+    "gemini-3.5-flash",           # Kararlı — En akıllı, sınav için ideal
+    "gemini-3.1-flash-lite",      # Kararlı — Hızlı ve ekonomik
+    "gemini-3.1-pro-preview",     # Önizleme — Güçlü akıl yürütme
+    "gemini-3-flash-preview",     # Önizleme — Frontier performans
+    # Gemini 2.5 — Kararlı Nesil
+    "gemini-2.5-flash",           # Kararlı — En geniş erişim, önerilen
+    "gemini-2.5-pro",             # Kararlı — Derin akıl yürütme
+    "gemini-2.5-flash-lite",      # Kararlı — Hızlı ve uygun fiyatlı
+    # Gemini 1.5 — Eski Nesil (hâlâ aktif)
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b",
+    "gemini-1.5-pro",
+]
+
+
+async def validate_gemini_api_key(api_key: str, model_name: str, lang: str = "tr") -> dict:
+    """
+    Validate a Gemini API key and model by sending a minimal 1-token test request
+    via the v1beta REST API. Returns a dict with 'valid' (bool) and 'message_key' (str).
+    """
+    if not api_key or not api_key.strip():
+        return {"valid": False, "message_key": "GEMINI_KEY_MISSING_FOR_VALIDATION"}
+
+    # Normalize model name: strip whitespace and remove leading 'models/' if present
+    clean_model = model_name.strip().removeprefix("models/") if model_name else "gemini-1.5-flash"
+
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{clean_model}:generateContent?key={api_key.strip()}"
+    )
+    payload = {
+        "contents": [{"parts": [{"text": "Hi"}]}],
+        "generationConfig": {"maxOutputTokens": 1}
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(url, json=payload)
+
+        if response.status_code == 200:
+            logger.info(f"API key validation successful for model: {clean_model}")
+            return {"valid": True, "message_key": "GEMINI_KEY_VALID"}
+
+        if response.status_code in (401, 403):
+            logger.warning(f"API key validation failed – unauthorized (status={response.status_code})")
+            return {"valid": False, "message_key": "GEMINI_KEY_INVALID"}
+
+        if response.status_code == 404:
+            logger.warning(f"API key validation failed – model not found: {clean_model}")
+            return {"valid": False, "message_key": "GEMINI_MODEL_NOT_FOUND"}
+
+        if response.status_code == 429:
+            logger.warning("API key validation failed – quota exceeded")
+            return {"valid": False, "message_key": "GEMINI_QUOTA_EXCEEDED"}
+
+        # Unknown non-OK status
+        logger.warning(f"API key validation returned unexpected status: {response.status_code}")
+        return {"valid": False, "message_key": "GEMINI_VALIDATION_FAILED"}
+
+    except httpx.ConnectError:
+        logger.error("API key validation – connection error reaching Google API")
+        return {"valid": False, "message_key": "GEMINI_CONNECTION_ERROR"}
+    except Exception as e:
+        logger.error(f"API key validation unexpected error: {e}")
+        return {"valid": False, "message_key": "GEMINI_VALIDATION_FAILED"}
+
+
 
 
 @dataclass
@@ -113,7 +186,7 @@ async def _call_hf_api_with_token(model_id: str, token: str, prompt: str, max_ne
             raise
 
 
-async def _generate_with_fallback(prompt: str, max_tokens: int = 4000, user_api_key: str | None = None, user_model: str | None = None) -> tuple[str, str, str | None]:
+async def _generate_with_fallback(prompt: str, max_tokens: int = 4000, user_api_key: str | None = None, user_model: str | None = None, lang: str = "tr") -> tuple[str, str, str | None]:
     """Try User's Gemini API key first if available, otherwise fallback to HF then system Gemini."""
     errors: list[AIProviderError] = []
 
@@ -126,7 +199,7 @@ async def _generate_with_fallback(prompt: str, max_tokens: int = 4000, user_api_
                 "max_output_tokens": 8192,
             }
             # Use user_model if provided, otherwise the retry function will discover it
-            response, actual_model = await _call_gemini_with_retry(prompt, generation_config, api_key=user_api_key, model_override=user_model)
+            response, actual_model = await _call_gemini_with_retry(prompt, generation_config, api_key=user_api_key, model_override=user_model, lang=lang)
             text = (response.text or "").strip()
             if text:
                 return text, "user_gemini", actual_model
@@ -160,7 +233,7 @@ async def _generate_with_fallback(prompt: str, max_tokens: int = 4000, user_api_
                 "temperature": 0.7,
                 "max_output_tokens": 8192,
             }
-            response, actual_model = await _call_gemini_with_retry(prompt, generation_config, api_key=settings.GEMINI_API_KEY)
+            response, actual_model = await _call_gemini_with_retry(prompt, generation_config, api_key=settings.GEMINI_API_KEY, lang=lang)
             text = (response.text or "").strip()
             if text:
                 return text, "system_gemini", actual_model
@@ -170,7 +243,7 @@ async def _generate_with_fallback(prompt: str, max_tokens: int = 4000, user_api_
             errors.append(AIProviderError("system_gemini", str(e)))
 
     error_text = "; ".join(f"{item.provider}: {item.error}" for item in errors[-5:])
-    raise ValueError(f"All AI providers failed. {error_text}")
+    raise ValueError(f"{translate('AI_ALL_FAILED', lang)} Detay: {error_text}")
 
 
 async def generate_questions_from_text(
@@ -195,7 +268,7 @@ async def generate_questions_from_text(
         prompt = _build_quiz_prompt(text, mc_count, oe_count, difficulty, language, weak_topics)
         
         # Call AI with fallback
-        generated_text, provider, actual_model = await _generate_with_fallback(prompt, user_api_key=user_api_key, user_model=user_model)
+        generated_text, provider, actual_model = await _generate_with_fallback(prompt, user_api_key=user_api_key, user_model=user_model, lang=language)
         _log_prompt("QUIZ_GENERATION", prompt, response=generated_text, provider=provider)
         
         # Parse JSON response
@@ -211,7 +284,7 @@ async def generate_questions_from_text(
                 questions = json.loads(cleaned_response)
         except json.JSONDecodeError:
             logger.error(f"Failed to parse AI response: {generated_text[:500]}...")
-            raise ValueError("Could not parse JSON response from AI")
+            raise ValueError(translate("AI_PARSE_ERROR", lang))
 
         # Validate and format questions
         formatted_questions = _format_questions(questions, mc_count, oe_count)
@@ -221,7 +294,7 @@ async def generate_questions_from_text(
         
     except Exception as e:
         logger.error(f"Error generating questions: {str(e)}")
-        raise ValueError(f"Failed to generate questions: {str(e)}")
+        raise ValueError(f"{translate('QUIZ_GEN_FAILED', lang)}: {str(e)}")
 
 
 async def grade_open_ended_answer(
@@ -241,7 +314,7 @@ async def grade_open_ended_answer(
         prompt = _build_grading_prompt(question_text, user_answer, note_content, rubric, language)
 
         # Use the same Gemini-first fallback chain as question generation
-        generated_text, provider, actual_model = await _generate_with_fallback(prompt, max_tokens=2000, user_api_key=user_api_key, user_model=user_model)
+        generated_text, provider, actual_model = await _generate_with_fallback(prompt, max_tokens=2000, user_api_key=user_api_key, user_model=user_model, lang=language)
 
         # Log the interaction
         _log_prompt("GRADING", prompt, response=generated_text, provider=provider)
@@ -258,7 +331,7 @@ async def grade_open_ended_answer(
                 grading_result = json.loads(cleaned)
         except json.JSONDecodeError:
             logger.error(f"Failed to parse grading response: {generated_text[:300]}")
-            raise ValueError("Could not parse JSON response from AI")
+            raise ValueError(translate("AI_PARSE_ERROR", lang))
 
         # Ensure required fields exist with safe defaults
         if "score" not in grading_result:
@@ -270,7 +343,7 @@ async def grade_open_ended_answer(
 
     except Exception as e:
         logger.error(f"Error grading answer: {str(e)}")
-        raise ValueError("Failed to grade answer")
+        raise ValueError(translate("GRADING_FAILED", lang))
 
 
 
@@ -424,13 +497,13 @@ def _extract_relevant_context(question_text: str, note_content: str, max_chars: 
     return "\n\n".join(result_parts)
 
 
-async def _call_gemini_with_retry(prompt: str, generation_config: Dict[str, Any], max_retries: int = 3, api_key: str | None = None, model_override: str | None = None):
+async def _call_gemini_with_retry(prompt: str, generation_config: Dict[str, Any], max_retries: int = 3, api_key: str | None = None, model_override: str | None = None, lang: str = "tr"):
     """Call Gemini API with explicit model prefixes and robust 503/404 handling.
     Returns (response, actual_model_name).
     """
     effective_api_key = api_key or settings.GEMINI_API_KEY
     if not effective_api_key:
-        raise ValueError("Gemini API key not configured")
+        raise ValueError(translate("GEMINI_KEY_MISSING", lang))
         
     last_exception = None
     # Prioritize v1beta for newer models in 2026 context
@@ -516,7 +589,7 @@ async def _call_gemini_with_retry(prompt: str, generation_config: Dict[str, Any]
 
     if last_exception:
         raise last_exception
-    raise ValueError("All Gemini connection attempts failed. Check logs for details.")
+    raise ValueError(translate("AI_ALL_FAILED", lang))
 
 
 def _format_questions(questions: List[Dict[str, Any]], mc_count: int, oe_count: int) -> List[Dict[str, Any]]:

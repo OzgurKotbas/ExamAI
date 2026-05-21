@@ -422,8 +422,11 @@ async def run_quiz_grading(grading_id: str, quiz_id: str, user_answers: Dict[str
 
             note_content = decrypt_text(note.cleaned_text_encrypted)
 
-            # Points per question (all questions sum to 100)
-            q_score = 100.0 / len(quiz.questions) if quiz.questions else 0
+            # Points calculation (all questions sum to exactly 100)
+            num_questions = len(quiz.questions)
+            base_q_score = 100 // num_questions
+            last_q_score = 100 - (base_q_score * (num_questions - 1))
+            
             quiz_lang = quiz.parameters.get("language", "tr")
 
             # Get user to fetch Gemini API Key and Model
@@ -435,9 +438,11 @@ async def run_quiz_grading(grading_id: str, quiz_id: str, user_answers: Dict[str
             total_score = 0.0
             graded_count = 0
 
-            for question in quiz.questions:
+            for i, question in enumerate(quiz.questions):
                 question_id_str = str(question.id)
                 user_answer = user_answers.get(question_id_str, "")
+
+                current_max_score = last_q_score if i == num_questions - 1 else base_q_score
 
                 answer = Answer(
                     user_id=grading.user_id,
@@ -466,7 +471,7 @@ async def run_quiz_grading(grading_id: str, quiz_id: str, user_answers: Dict[str
                     is_correct = (
                         user_answer.strip().upper() == (question.correct_answer or "").upper()
                     )
-                    score = q_score if is_correct else 0.0
+                    score = float(current_max_score) if is_correct else 0.0
                     answer.score = score
                     answer.feedback = get_localized_feedback(
                         quiz_lang, score, question.correct_answer, question.options
@@ -491,7 +496,7 @@ async def run_quiz_grading(grading_id: str, quiz_id: str, user_answers: Dict[str
                             user.gemini_model = actual_model
                             # We'll commit at the end of the loop or after each question
                         ai_score = grading_result.get("score", 0)
-                        normalized_score = (ai_score / 100.0) * q_score
+                        normalized_score = (ai_score / 100.0) * current_max_score
                         answer.score = normalized_score
                         answer.feedback = grading_result.get(
                             "feedback", "No feedback available."
@@ -536,3 +541,82 @@ async def run_quiz_grading(grading_id: str, quiz_id: str, user_answers: Dict[str
             raise
         finally:
             await task_engine.dispose()
+
+
+# ─── Günlük Gemini Model Tarama Görevi ──────────────────────────────────────
+
+@celery_app.task(name="services.celery_tasks.refresh_gemini_models_task")
+def refresh_gemini_models_task() -> dict:
+    """
+    Her gece Google Gemini API'sini sorgular, generateContent destekleyen
+    tüm modelleri çeker ve SUPPORTED_GEMINI_MODELS ile karşılaştırır.
+
+    Yeni model bulunursa log'a yazar. Liste güncellenmez (manuel onay gerekir),
+    sadece bildirim/uyarı üretilir.
+
+    Returns:
+        dict: { "existing": [...], "api": [...], "new": [...] }
+    """
+    import google.generativeai as genai
+    from config import settings
+    from services.ai_service import SUPPORTED_GEMINI_MODELS
+
+    logger.info("[ModelRefresh] Günlük Gemini model taraması başlıyor...")
+
+    # Sadece sınav için uygun olmayan modelleri filtrele
+    EXCLUDED_KEYWORDS = [
+        "embedding", "tts", "live", "image", "vision",
+        "robotics", "research", "computer-use", "lyria",
+        "veo", "imagen", "banana",
+    ]
+
+    try:
+        api_key = settings.GEMINI_API_KEY
+        if not api_key:
+            logger.warning("[ModelRefresh] GEMINI_API_KEY eksik, tarama atlandı.")
+            return {"error": "no_api_key"}
+
+        genai.configure(api_key=api_key)
+        available = genai.list_models()
+
+        quiz_compatible = []
+        for m in available:
+            if "generateContent" not in m.supported_generation_methods:
+                continue
+            name_clean = m.name.replace("models/", "").lower()
+            if any(kw in name_clean for kw in EXCLUDED_KEYWORDS):
+                continue
+            quiz_compatible.append(m.name.replace("models/", ""))
+
+        # Yeni model kontrolü
+        new_models = [m for m in quiz_compatible if m not in SUPPORTED_GEMINI_MODELS]
+        removed_models = [m for m in SUPPORTED_GEMINI_MODELS if m not in quiz_compatible]
+
+        if new_models:
+            logger.warning(
+                f"[ModelRefresh] 🆕 YENİ MODEL(LER) TESPİT EDİLDİ: {new_models}\n"
+                f"  → ai_service.py ve ProfileMenu.jsx güncellenmesi gerekiyor."
+            )
+        if removed_models:
+            logger.warning(
+                f"[ModelRefresh] ⚠️ LİSTEDEN KALKAN MODEL(LER): {removed_models}\n"
+                f"  → Bu modeller artık API'de yok veya erişilemez."
+            )
+
+        if not new_models and not removed_models:
+            logger.info("[ModelRefresh] ✅ Model listesi güncel, fark yok.")
+
+        result = {
+            "existing_in_code": SUPPORTED_GEMINI_MODELS,
+            "available_from_api": quiz_compatible,
+            "new_models": new_models,
+            "removed_models": removed_models,
+        }
+        logger.info(f"[ModelRefresh] Tarama tamamlandı: {len(quiz_compatible)} API modeli, "
+                    f"{len(new_models)} yeni, {len(removed_models)} kalkan.")
+        return result
+
+    except Exception as e:
+        logger.error(f"[ModelRefresh] Model taraması başarısız: {e}")
+        return {"error": str(e)}
+
