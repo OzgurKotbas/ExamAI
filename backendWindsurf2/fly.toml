@@ -1,0 +1,54 @@
+app = "backendwindsurf2"
+primary_region = "fra"
+
+[build]
+
+[processes]
+  app = "uvicorn main:app --host 0.0.0.0 --port 8080"
+  worker = "celery -A celery_app worker -Q default,quiz_generation --loglevel=info --pool=solo"
+
+# ── App makineleri (HTTP sunucu) ──────────────────────────────────────────────
+[[services]]
+  protocol = "tcp"
+  internal_port = 8080
+  processes = ["app"]
+  # Boşta kalan app makineleri durdurulabilir ama otomatik başlatılabilir
+  auto_stop_machines = true
+  auto_start_machines = true
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+  
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 25
+    soft_limit = 20
+
+# ── App VM boyutu ─────────────────────────────────────────────────────────────
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1
+  processes = ["app"]
+
+# ── Worker VM — Celery task queue işlemcisi ───────────────────────────────────
+# Worker makineler HİÇBİR ZAMAN otomatik durmamalı; aksi hâlde quiz taskları
+# kuyruğa girdiğinde işlenmez ve quiz sonsuza dek "pending" durumunda kalır.
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1
+  processes = ["worker"]
+
+# Worker çöktüğünde Fly.io makineyi yeniden başlatsın (stopped kalmasın)
+[[restart]]
+  policy = "on-failure"
+  retries = 10
+  processes = ["worker"]
+

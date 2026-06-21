@@ -1,0 +1,144 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-dark-900 text-gray-100 font-sans antialiased;
+    min-height: 100vh;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-dark-900;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-gray-600 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-500;
+  }
+}
+
+@layer components {
+  .glass {
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .glass-hover {
+    @apply glass transition-all duration-300;
+  }
+
+  .glass-hover:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.15);
+    transform: translateY(-2px);
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl 
+           bg-gradient-to-r from-blue-600 to-blue-500 text-white font-semibold 
+           transition-all duration-200 hover:from-blue-500 hover:to-blue-400 
+           hover:shadow-lg hover:shadow-blue-500/25 active:scale-95
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl 
+           glass text-gray-300 font-semibold transition-all duration-200 
+           hover:text-white hover:bg-white/10 active:scale-95
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .input-field {
+    @apply w-full px-4 py-3 rounded-xl glass text-gray-100 placeholder-gray-500
+           focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50
+           transition-all duration-200;
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+
+  .input-field:focus {
+    background: rgba(255, 255, 255, 0.07);
+  }
+
+  .card {
+    @apply rounded-2xl p-6 glass;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-green {
+    @apply badge bg-emerald-500/20 text-emerald-400 border border-emerald-500/30;
+  }
+
+  .badge-yellow {
+    @apply badge bg-amber-500/20 text-amber-400 border border-amber-500/30;
+  }
+
+  .badge-blue {
+    @apply badge bg-blue-500/20 text-blue-400 border border-blue-500/30;
+  }
+
+  .badge-red {
+    @apply badge bg-red-500/20 text-red-400 border border-red-500/30;
+  }
+
+  .badge-gray {
+    @apply badge bg-gray-500/20 text-gray-400 border border-gray-500/30;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-gradient-to-r from-blue-400 via-purple-400 to-blue-600 bg-clip-text text-transparent;
+  }
+
+  .glow {
+    box-shadow: 0 0 40px rgba(59, 130, 246, 0.15);
+  }
+
+  .glow-sm {
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.1);
+  }
+}
+
+/* Custom animations */
+@keyframes shimmer {
+  0% { background-position: -1000px 0; }
+  100% { background-position: 1000px 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.04) 75%);
+  background-size: 1000px 100%;
+  animation: shimmer 2s infinite;
+}
+
+@keyframes bounce-slow {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(3px); }
+}
+
+.animate-bounce-slow {
+  animation: bounce-slow 2s infinite ease-in-out;
+}

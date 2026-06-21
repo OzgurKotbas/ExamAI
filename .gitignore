@@ -1,0 +1,45 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Proje kök .gitignore
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Docs klasörü — sadece lokal tutulur, GitHub'a gönderilmez
+Docs/
+
+# Environment files
+**/.env
+**/.env.local
+**/.env.production
+**/.env.staging
+**/.env.*.local
+
+# Virtual environments
+**/.venv/
+**/venv/
+**/ENV/
+**/node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+
+# Python cache
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+
+# Scratch / geçici test dosyaları
+**/scratch/
+
+# Frontend build artifacts
+**/dist/
+**/.next/
+**/build/
+
+# Logs
+**/*.log
+**/logs/
